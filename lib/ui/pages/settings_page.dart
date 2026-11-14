@@ -65,6 +65,7 @@ enum _Section {
         picture => l10n.settingsGroupPicture,
         audio => l10n.audio,
         subtitles => l10n.subtitles,
+        danmaku => l10n.danmakuHeader,
         languages => l10n.sectionLanguagesOnly,
         interface => l10n.sectionInterface,
         content => l10n.sectionContent,
