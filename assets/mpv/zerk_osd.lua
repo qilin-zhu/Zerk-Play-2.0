@@ -43,6 +43,9 @@ local L = {
   play_now = "Play now", keep_watching = "Keep watching",
   mute = "Mute", unmute = "Unmute",
   stereo_downmix = "Stereo downmix", stereo_downmix_detail = "Clearer voices on TV speakers", on = "On",
+  danmaku = "Danmaku", danmaku_hide = "Hide comments", danmaku_show = "Show comments",
+  danmaku_count = "{n} comments", danmaku_none = "No comments for this episode",
+  danmaku_off = "Turn off in Settings",
 }
 
 local function tr(key, n)
@@ -70,6 +73,7 @@ local ICON = WINDOWS and {
   mute = "\238\157\143",
   channels = "\238\159\180",
   swap = "\238\163\171",
+  danmaku = "\238\162\189",
 } or {
   play = "\238\147\139",
   pause = "\238\145\188",
@@ -89,6 +93,7 @@ local ICON = WINDOWS and {
   mute = "\238\155\132",
   channels = "\238\154\165",
   swap = "\238\152\165",
+  danmaku = "\238\130\185",
 }
 
 local S = {
@@ -115,6 +120,7 @@ local S = {
   scope = 0, anamorphic = 1, autocrop = false, crop = nil, margin = 0, crop_hits = 0,
   hits = {},
   pointer = false, hover = nil, mouse_x = 0,
+  danmaku = { enabled = false, visible = true, count = 0 },
 }
 
 local W, H = 1920, 1080
@@ -242,6 +248,9 @@ local function buttons()
   if S.versions_title and #S.versions > 1 then
     right[#right + 1] = { id = "versions", glyph = ICON.channels, label = S.versions_title }
   end
+  if S.danmaku.enabled then
+    right[#right + 1] = { id = "danmaku", glyph = ICON.danmaku, label = tr("danmaku") }
+  end
   right[#right + 1] = { id = "settings", glyph = ICON.settings, label = tr("settings") }
   right[#right + 1] = { id = "fullscreen", glyph = ICON.fullscreen, label = tr("full_screen") }
   for _, b in ipairs(right) do b.right = true; list[#list + 1] = b end
@@ -254,6 +263,7 @@ local function button_index(list, id)
 end
 
 local open_panel
+local dm_set_visible
 
 local function percent(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end
 
@@ -498,6 +508,16 @@ open_panel = function(kind)
   if kind == "audio" then p.title, p.items = tr("audio"), track_items("audio")
   elseif kind == "subs" then p.title, p.items = tr("subtitles"), track_items("subs")
   elseif kind == "chapters" then p.title, p.items = tr("chapters"), chapter_items()
+  elseif kind == "danmaku" then
+    p.title = tr("danmaku")
+    if S.danmaku.count > 0 then
+      p.subhead = tr("danmaku_count", S.danmaku.count)
+      p.items = {
+        { id = "toggle", label = S.danmaku.visible and tr("danmaku_hide") or tr("danmaku_show"), selected = S.danmaku.visible },
+      }
+    else
+      p.items = { { label = tr("danmaku_none"), inert = true } }
+    end
   elseif kind == "settings" then p.title, p.items = tr("settings"), settings_items()
   elseif kind == "version" then
     p.title, p.items = S.versions_title or tr("version"), {}
@@ -558,6 +578,9 @@ local function panel_activate(item)
     local sub_panels = { subsize = "subsize", subdelay = "subdelay", subsearch = "sublang" }
     if sub_panels[item.id] then open_panel(sub_panels[item.id])
     else send("sub", tostring(item.id)); S.panel = nil end
+  elseif p.kind == "danmaku" then
+    if item.id == "toggle" then dm_set_visible(not S.danmaku.visible) end
+    S.panel = nil
   elseif p.kind == "chapters" then mp.commandv("seek", item.id, "absolute+exact"); S.panel = nil
   elseif p.kind == "settings" then
     if item.id == "stats" then mp.commandv("script-binding", "stats/display-stats-toggle"); S.panel = nil; S.visible = false
@@ -1225,7 +1248,7 @@ activate_button = function(id)
   if id == "play" then toggle_pause()
   elseif id == "rewind" then seek_relative(-S.seek_back)
   elseif id == "forward" then seek_relative(S.seek_fwd)
-  elseif id == "audio" or id == "subs" or id == "chapters" or id == "settings" then open_panel(id)
+  elseif id == "audio" or id == "subs" or id == "chapters" or id == "settings" or id == "danmaku" then open_panel(id)
   elseif id == "versions" then open_panel("version")
   elseif id == "next" then send("next")
   elseif id == "fullscreen" then send("fullscreen")
@@ -1638,6 +1661,207 @@ mp.observe_property("pause", "bool", function() if S.visible then touch() end; r
 mp.observe_property("paused-for-cache", "bool", function() refresh() end)
 mp.observe_property("osd-dimensions", "native", function() render() end)
 mp.observe_property("user-data/zerk/fullscreen", "native", function() render() end)
+
+-- ===== danmaku =====
+-- Comments are drawn as ASS events in dedicated overlays and repositioned
+-- every frame, the same way uosc_danmaku does it: mpv's osd-overlay only
+-- renders a still image, so the scroll has to be recomputed by us.
+local dm_low = mp.create_osd_overlay("ass-events")
+local dm_high = mp.create_osd_overlay("ass-events")
+local dm_timer = nil
+local DM = { list = {} }
+local DM_W, DM_H = 1920, 1080
+local DM_FONT, DM_LINE, DM_DUR, DM_AREA = 44, 52, 11, 0.7
+
+local function dm_active()
+  return S.danmaku.enabled and S.danmaku.visible and #DM.list > 0
+end
+
+local function dm_wipe()
+  dm_low:remove()
+  dm_high:remove()
+end
+
+local function dm_width(s)
+  local ascii, wide = 0, 0
+  for i = 1, #s do
+    local b = s:byte(i)
+    if b < 0x80 then ascii = ascii + 1 elseif b >= 0xC0 then wide = wide + 1 end
+  end
+  return (ascii * 0.55 + wide) * DM_FONT
+end
+
+local function dm_color(rgb)
+  local r = math.floor(rgb / 65536) % 256
+  local g = math.floor(rgb / 256) % 256
+  local b = rgb % 256
+  return string.format("%02X%02X%02X", b, g, r)
+end
+
+local function dm_overlap(y1, h1, y2, h2)
+  return y1 < y2 + h2 and y2 < y1 + h1
+end
+
+-- Top-down slot search; skips past every colliding comment in one step.
+local function dm_slot_down(active, height, collides, limit)
+  local y = 0
+  while y + height <= limit do
+    local next_y = nil
+    for _, d in ipairs(active) do
+      if dm_overlap(y, height, d.y, DM_LINE) and collides(d) then
+        local below = d.y + DM_LINE
+        next_y = next_y and math.max(next_y, below) or below
+      end
+    end
+    if not next_y then return y end
+    y = next_y
+  end
+  return nil
+end
+
+local function dm_slot_up(active, height, limit)
+  local y = limit - height
+  while y >= 0 do
+    local next_y = nil
+    for _, d in ipairs(active) do
+      if dm_overlap(y, height, d.y, DM_LINE) then
+        local above = d.y - height
+        next_y = next_y and math.min(next_y, above) or above
+      end
+    end
+    if not next_y then return y end
+    y = next_y
+  end
+  return nil
+end
+
+-- Comments arrive sorted by time. Each one is placed once, against the ones
+-- still on screen at that moment, so the layout never shifts afterwards.
+local function dm_layout()
+  local limit = DM_H * DM_AREA
+  local active = {}
+  for _, c in ipairs(DM.list) do
+    for i = #active, 1, -1 do
+      if active[i].end_time <= c.t then table.remove(active, i) end
+    end
+    local y
+    if c.kind == 4 then
+      y = dm_slot_up(active, DM_LINE, limit)
+    elseif c.kind == 5 then
+      y = dm_slot_down(active, DM_LINE, function() return true end, limit)
+    else
+      local velocity = (c.len + DM_W) / DM_DUR
+      y = dm_slot_down(active, DM_LINE, function(previous)
+        local delta_x = (c.t - previous.t) * previous.v - previous.len
+        if delta_x < 0 then return true end
+        local delta_v = velocity - previous.v
+        if delta_v <= 0 then return false end
+        return (delta_x / delta_v) < (previous.end_time - c.t)
+      end, limit)
+      c.v = velocity
+    end
+    if y then
+      c.y = y
+      if c.kind == 4 or c.kind == 5 then
+        c.end_time = c.t + 5
+      else
+        c.end_time = c.t + DM_DUR
+      end
+      active[#active + 1] = c
+    else
+      c.dropped = true
+    end
+  end
+end
+
+local function dm_draw()
+  local pos = prop("time-pos", 0)
+  if not pos then return end
+  local low, high = {}, {}
+  for _, c in ipairs(DM.list) do
+    if c.y and not c.dropped and c.t <= pos and c.end_time >= pos then
+      local color = dm_color(c.color)
+      if c.kind == 4 or c.kind == 5 then
+        high[#high + 1] = string.format(
+          "{\\an8\\pos(%d,%.1f)\\fn%s\\fs%d\\bord2\\shad0\\c&H%s&}%s",
+          math.floor(DM_W / 2), c.y, T.font, DM_FONT, color, esc(c.text))
+      else
+        local progress = (pos - c.t) / DM_DUR
+        local x = DM_W - progress * (DM_W + c.len)
+        low[#low + 1] = string.format(
+          "{\\an7\\pos(%.1f,%.1f)\\fn%s\\fs%d\\bord2\\shad0\\c&H%s&}%s",
+          x, c.y, T.font, DM_FONT, color, esc(c.text))
+      end
+    end
+  end
+  dm_low.res_x, dm_low.res_y, dm_low.z = DM_W, DM_H, 0
+  dm_low.data = table.concat(low, "\n")
+  dm_low:update()
+  dm_high.res_x, dm_high.res_y, dm_high.z = DM_W, DM_H, 1
+  dm_high.data = table.concat(high, "\n")
+  dm_high:update()
+end
+
+local function dm_tick()
+  dm_timer = nil
+  if not dm_active() then
+    dm_wipe()
+    return
+  end
+  dm_draw()
+  if not prop("pause", false) then dm_timer = mp.add_timeout(1 / 24, dm_tick) end
+end
+
+local function dm_kick()
+  if dm_timer then return end
+  dm_tick()
+end
+
+dm_set_visible = function(value)
+  S.danmaku.visible = value and true or false
+  if S.danmaku.visible then dm_kick() else dm_wipe() end
+  render()
+end
+
+mp.register_script_message("danmaku", function(raw)
+  local d = json(raw) or {}
+  S.danmaku.enabled = d.enabled == true
+  S.danmaku.visible = d.visible ~= false
+  DM.list = {}
+  for _, c in ipairs(type(d.comments) == "table" and d.comments or {}) do
+    local t = tonumber(c.t)
+    local text = c.text
+    if t and text and text ~= "" then
+      DM.list[#DM.list + 1] = {
+        t = t,
+        text = text,
+        kind = tonumber(c.kind) or 1,
+        color = tonumber(c.color) or 0xFFFFFF,
+        len = dm_width(text),
+      }
+    end
+  end
+  table.sort(DM.list, function(a, b) return a.t < b.t end)
+  S.danmaku.count = #DM.list
+  dm_layout()
+  if dm_active() then dm_kick() else dm_wipe() end
+  render()
+end)
+
+-- Comment scrolling has to keep running at frame rate while the OSD itself is
+-- throttled to twice a second, so it gets its own clock.
+mp.observe_property("pause", "bool", function(_, paused)
+  if paused == false and dm_active() and not dm_timer then dm_kick() end
+end)
+
+mp.observe_property("osd-dimensions", "native", function()
+  local w, h = prop("osd-width", 0), prop("osd-height", 0)
+  if w and h and h > 0 and math.abs(w / h - DM_W / DM_H) > 0.01 then
+    local height = math.floor(DM_W / (w / h) + 0.5)
+    DM_H = height
+  end
+  if dm_active() then dm_kick() end
+end)
 
 msg.info("osd loaded; icon font: " .. T.icons)
 render()

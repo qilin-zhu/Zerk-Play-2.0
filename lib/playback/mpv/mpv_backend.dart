@@ -51,6 +51,7 @@ final class MpvBackend implements PlayerBackend {
   late final OsdModel _curtain = OsdModel(
     state: _state,
     send: (name, [arg]) => _events.add(PlayerOsdEvent(name, arg)),
+    osd: osd,
     togglePause: () {},
     seekTo: (_) {},
   );
@@ -127,6 +128,11 @@ final class MpvBackend implements PlayerBackend {
         'chapters': l.chapters,
         'next_episode': l.nextEpisode,
         'settings': l.settings,
+        'danmaku': l.danmakuHeader,
+        'danmaku_hide': l.danmakuHide,
+        'danmaku_show': l.danmakuShow,
+        'danmaku_count': l.danmakuCount('{n}'),
+        'danmaku_none': l.danmakuEmpty,
         'full_screen': l.fullScreen,
         'off': l.subtitleOff,
         'chapter': l.chapterNumber('{n}'),

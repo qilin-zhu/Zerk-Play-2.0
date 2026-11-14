@@ -54,6 +54,14 @@ class DanmakuSession extends ChangeNotifier {
   /// Silence is the worst outcome here: an empty screen looks like a bug.
   void Function(DanmakuStatus status, int count)? onResult;
 
+  /// Raw comments, kept for backends that draw danmaku themselves. On Windows
+  /// the whole player UI belongs to the mpv Lua OSD, so Flutter never gets a
+  /// chance to paint over the video.
+  List<DanmakuComment> comments = const [];
+
+  /// Fired whenever the set of comments a backend should draw changes.
+  VoidCallback? onData;
+
   bool _started = false;
   bool _disposed = false;
   DanmakuApi? _api;
@@ -147,9 +155,11 @@ class DanmakuSession extends ChangeNotifier {
       final id = result.episodeId;
       if (id == null) {
         store.clear();
+        comments = const [];
         status = DanmakuStatus.empty;
         _notify();
         onResult?.call(status, 0);
+        onData?.call();
         return;
       }
       matchedTitle = result.title ?? name;
@@ -161,15 +171,18 @@ class DanmakuSession extends ChangeNotifier {
       error = '$e';
       _notify();
       onResult?.call(status, 0);
+      onData?.call();
     }
   }
 
   Future<void> _apply(int episodeId) async {
-    final comments = await _client.comments(episodeId);
+    final list = await _client.comments(episodeId);
     if (_disposed) return;
-    store.replaceAll(comments);
+    comments = list;
+    store.replaceAll(list);
     status = store.isEmpty ? DanmakuStatus.empty : DanmakuStatus.ready;
     _notify();
+    onData?.call();
   }
 
   /// Turns the feature on or off without leaving the player.
@@ -178,9 +191,11 @@ class DanmakuSession extends ChangeNotifier {
     await settings.save();
     if (!value) {
       store.clear();
+      comments = const [];
       status = DanmakuStatus.off;
       _started = false;
       _notify();
+      onData?.call();
       return;
     }
     _started = false;

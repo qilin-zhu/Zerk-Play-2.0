@@ -59,6 +59,7 @@ final class OsdModel extends ChangeNotifier {
     required this.send,
     required this.togglePause,
     required this.seekTo,
+    this.osd,
     this.setVolume,
     this.toggleMute,
     this.setSpeed,
@@ -73,6 +74,11 @@ final class OsdModel extends ChangeNotifier {
   final void Function(String name, [String? arg]) send;
   final VoidCallback togglePause;
   final void Function(Duration position) seekTo;
+
+  /// Straight channel to the backend's OSD, for things the backend itself has
+  /// to draw (the mpv Lua OSD owns the whole player UI on Windows, so danmaku
+  /// has to be handed over to it rather than drawn in Flutter).
+  final void Function(String name, Object? data)? osd;
 
   final void Function(double volume)? setVolume;
   final VoidCallback? toggleMute;

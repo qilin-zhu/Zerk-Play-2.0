@@ -118,7 +118,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
   bool _introSkipped = false;
   bool _nextCancelled = false;
   String _lastPhase = '';
-
+  String _pushedPhase = '';
   late final _countdown = AnimationController(vsync: this)
     ..addStatusListener((s) => s == AnimationStatus.completed ? _playNext() : null);
   bool _countdownStarted = false;
@@ -152,6 +152,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
       };
       if (text != null) model.onToast?.call(text);
     };
+    _danmaku.onData = _pushDanmaku;
     unawaited(_danmaku.init());
     WidgetsBinding.instance.addPostFrameCallback((_) => _root.requestFocus());
   }
@@ -180,7 +181,30 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
       _stopCountdown();
     }
     _lastPhase = model.phase;
+    // The comments may have arrived before the OSD script finished loading, in
+    // which case the first message was dropped. Phase changes are a reliable
+    // moment to hand them over again.
+    if (_pushedPhase != model.phase) _pushDanmaku();
     setState(() {});
+  }
+
+  /// Hands the comments to the backend. On Windows the mpv Lua OSD paints the
+  /// whole player, so this is the only way danmaku can reach the screen.
+  void _pushDanmaku() {
+    _pushedPhase = model.phase;
+    model.osd?.call('danmaku', {
+      'enabled': _danmaku.enabled,
+      'visible': _danmaku.visible,
+      'comments': [
+        for (final c in _danmaku.comments)
+          {
+            't': c.time.inMilliseconds / 1000,
+            'text': c.text,
+            'kind': c.mode,
+            'color': c.color,
+          },
+      ],
+    });
   }
 
   void _onState() {
