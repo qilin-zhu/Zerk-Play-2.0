@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../l10n/l10n.dart';
+import '../../playback/danmaku/danmaku_api.dart';
 import '../../playback/danmaku/danmaku_layer.dart';
 import '../../playback/danmaku/danmaku_session.dart';
 import '../../playback/media3/osd_model.dart';
@@ -153,6 +154,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
       if (text != null) model.onToast?.call(text);
     };
     _danmaku.onData = _pushDanmaku;
+    model.onDanmakuCommand = (command) => unawaited(_onDanmakuCommand(command));
     unawaited(_danmaku.init());
     WidgetsBinding.instance.addPostFrameCallback((_) => _root.requestFocus());
   }
@@ -191,6 +193,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
   /// Hands the comments to the backend. On Windows the mpv Lua OSD paints the
   /// whole player, so this is the only way danmaku can reach the screen.
   void _pushDanmaku() {
+    if (!mounted) return;
     _pushedPhase = model.phase;
     final s = _danmaku.settings;
     model.osd?.call('danmaku', {
@@ -204,6 +207,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
       'scrollLines': s.scrollLines,
       'topLines': s.topLines,
       'bottomLines': s.bottomLines,
+      'info': _danmakuInfo(),
       'comments': [
         for (final c in _danmaku.comments)
           {
@@ -214,6 +218,78 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
           },
       ],
     });
+  }
+
+  String _danmakuInfo() {
+    final l10n = context.l10n;
+    if (_danmaku.count == 0) {
+      return _danmaku.status == DanmakuStatus.failed ? l10n.danmakuFailed : l10n.danmakuEmpty;
+    }
+    final title = _danmaku.matchedTitle;
+    return [
+      if (title != null && title.isNotEmpty) title,
+      l10n.danmakuCount('${_danmaku.count}'),
+    ].join(' · ');
+  }
+
+  /// The mpv OSD panel only draws; the work happens here. It asks for a search,
+  /// then sends back the show it picked, then the episode.
+  Future<void> _onDanmakuCommand(String command) async {
+    if (!mounted) return;
+    if (command == 'search') return _danmakuSearch();
+    if (command == 'off') return _danmaku.setEnabled(false);
+    if (command.startsWith('anime:')) return _danmakuEpisodes(command.substring(6));
+    if (command.startsWith('episode:')) return _danmakuPick(command.substring(8));
+  }
+
+  Future<void> _danmakuSearch() async {
+    final l10n = context.l10n;
+    final keyword = _danmaku.query.isNotEmpty ? _danmaku.query : model.title;
+    final hits = await _danmaku.search(keyword);
+    if (!mounted) return;
+    model.osd?.call('danmaku-results', {
+      'stage': 'anime',
+      'items': [
+        for (final a in hits)
+          {
+            'id': '${a.sourceId}#${a.id}',
+            'label': a.title,
+            'detail': [
+              if (a.episodeCount != null) l10n.danmakuEpisodeCount('${a.episodeCount}'),
+              ?a.kind,
+            ].join(' · '),
+          },
+      ],
+    });
+  }
+
+  Future<void> _danmakuEpisodes(String ref) async {
+    final (sourceId, id) = _parseRef(ref);
+    if (id == null) return;
+    final episodes = await _danmaku.episodes(DanmakuAnime(id: id, title: '', sourceId: sourceId));
+    if (!mounted) return;
+    model.osd?.call('danmaku-results', {
+      'stage': 'episode',
+      'items': [
+        for (final e in episodes)
+          {'id': '${e.sourceId}#${e.id}', 'label': e.title},
+      ],
+    });
+  }
+
+  Future<void> _danmakuPick(String ref) async {
+    final (sourceId, id) = _parseRef(ref);
+    if (id == null) return;
+    final ok = await _danmaku.loadEpisode(DanmakuEpisode(id: id, title: '', sourceId: sourceId));
+    if (!mounted) return;
+    model.onToast?.call(ok ? context.l10n.danmakuLoaded('${_danmaku.count}') : context.l10n.danmakuEmpty);
+  }
+
+  /// `<sourceId>#<id>`, so a pick goes back to the server it came from.
+  (String, int?) _parseRef(String ref) {
+    final cut = ref.indexOf('#');
+    if (cut < 0) return ('', null);
+    return (ref.substring(0, cut), int.tryParse(ref.substring(cut + 1)));
   }
 
   void _onState() {

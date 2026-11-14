@@ -133,6 +133,9 @@ final class MpvBackend implements PlayerBackend {
         'danmaku_show': l.danmakuShow,
         'danmaku_count': l.danmakuCount('{n}'),
         'danmaku_none': l.danmakuEmpty,
+        'danmaku_search': l.danmakuSearch,
+        'danmaku_results': l.danmakuSearch,
+        'close': l.close,
         'full_screen': l.fullScreen,
         'off': l.subtitleOff,
         'chapter': l.chapterNumber('{n}'),
@@ -284,6 +287,9 @@ final class MpvBackend implements PlayerBackend {
             unawaited(_sendTrick(args.elementAtOrNull(2)));
           case 'fullscreen':
             unawaited(_toggleFullscreen());
+          case 'danmaku':
+            // The Lua panel asking for a search, an episode, or to be turned off.
+            _curtain.onDanmakuCommand?.call(args.elementAtOrNull(2) ?? '');
           default:
             _events.add(PlayerOsdEvent(name, args.elementAtOrNull(2)));
         }

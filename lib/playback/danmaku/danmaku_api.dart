@@ -34,6 +34,7 @@ final class DanmakuAnime {
     required this.title,
     this.kind,
     this.episodeCount,
+    this.sourceId = '',
   });
 
   final int id;
@@ -43,14 +44,18 @@ final class DanmakuAnime {
   final String? kind;
 
   final int? episodeCount;
+
+  /// Which source this came from, so later calls go back to the same one.
+  final String sourceId;
 }
 
 final class DanmakuEpisode {
-  const DanmakuEpisode({required this.id, required this.title, this.number});
+  const DanmakuEpisode({required this.id, required this.title, this.number, this.sourceId = ''});
 
   final int id;
   final String title;
   final int? number;
+  final String sourceId;
 }
 
 /// Client for the dandanplay open API, which `danmu_api` also speaks.
@@ -182,7 +187,7 @@ final class DanmakuApi {
     return (episodeId: null, title: null);
   }
 
-  Future<List<DanmakuAnime>> searchAnime(String keyword) async {
+  Future<List<DanmakuAnime>> searchAnime(String keyword, {String sourceId = ''}) async {
     if (base.isEmpty) return const [];
     const path = '/api/v2/search/anime';
     try {
@@ -199,6 +204,7 @@ final class DanmakuApi {
               title: e['animeTitle']?.toString() ?? '',
               kind: e['typeDescription']?.toString(),
               episodeCount: switch (e['episodeCount']) { final num n => n.toInt(), _ => null },
+              sourceId: sourceId,
             ),
       ];
     } catch (e) {
@@ -207,7 +213,7 @@ final class DanmakuApi {
     }
   }
 
-  Future<List<DanmakuEpisode>> episodes(int animeId) async {
+  Future<List<DanmakuEpisode>> episodes(int animeId, {String sourceId = ''}) async {
     if (base.isEmpty) return const [];
     final path = '/api/v2/bangumi/$animeId';
     try {
@@ -223,6 +229,7 @@ final class DanmakuApi {
           id: (e['episodeId'] as num).toInt(),
           title: e['episodeTitle']?.toString() ?? '',
           number: switch (e['episodeNumber']) { final num n => n.toInt(), _ => null },
+          sourceId: sourceId,
         ));
       }
       return out;

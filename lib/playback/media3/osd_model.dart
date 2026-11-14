@@ -80,6 +80,9 @@ final class OsdModel extends ChangeNotifier {
   /// has to be handed over to it rather than drawn in Flutter).
   final void Function(String name, Object? data)? osd;
 
+  /// Commands coming back from that OSD, such as a danmaku search request.
+  void Function(String command)? onDanmakuCommand;
+
   final void Function(double volume)? setVolume;
   final VoidCallback? toggleMute;
 

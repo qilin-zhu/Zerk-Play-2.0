@@ -65,7 +65,6 @@ class DanmakuSession extends ChangeNotifier {
 
   bool _started = false;
   bool _disposed = false;
-  DanmakuApi? _api;
 
   bool get enabled => settings.enabled;
 
@@ -87,17 +86,10 @@ class DanmakuSession extends ChangeNotifier {
 
   DanmakuSource? get _firstSource => settings.usableSources.isEmpty ? null : settings.usableSources.first;
 
-  DanmakuApi? get _client {
-    final source = _firstSource;
-    if (source == null) return null;
-    return _api ??= DanmakuApi.of(source);
-  }
-
   @override
   void dispose() {
     _disposed = true;
     _model.removeListener(_onTitleChanged);
-    _api?.close();
     super.dispose();
   }
 
@@ -191,16 +183,11 @@ class DanmakuSession extends ChangeNotifier {
     onData?.call();
   }
 
-  Future<void> _apply(int episodeId) async {
-    final api = _client;
-    if (api == null) return;
-    final list = await api.comments(episodeId);
-    if (_disposed) return;
-    comments = list;
-    store.replaceAll(list);
-    status = store.isEmpty ? DanmakuStatus.empty : DanmakuStatus.ready;
-    _notify();
-    onData?.call();
+  DanmakuSource? _sourceById(String id) {
+    for (final s in settings.usableSources) {
+      if (s.id == id) return s;
+    }
+    return null;
   }
 
   /// Turns the feature on or off without leaving the player.
@@ -242,35 +229,54 @@ class DanmakuSession extends ChangeNotifier {
     _notify();
   }
 
+  /// Asks every usable source and tags each hit with the source it came from,
+  /// so picking one goes back to the same server.
   Future<List<DanmakuAnime>> search(String keyword) async {
-    final api = _client;
-    if (api == null) return const [];
-    try {
-      return await api.searchAnime(keyword);
-    } catch (e) {
-      error = '$e';
-      return const [];
+    final out = <DanmakuAnime>[];
+    for (final source in settings.usableSources) {
+      final api = DanmakuApi.of(source);
+      try {
+        out.addAll(await api.searchAnime(keyword, sourceId: source.id));
+      } catch (e) {
+        error = '$e';
+      } finally {
+        api.close();
+      }
     }
+    return out;
   }
 
   Future<List<DanmakuEpisode>> episodes(DanmakuAnime anime) async {
-    final api = _client;
-    if (api == null) return const [];
+    final source = _sourceById(anime.sourceId) ?? _firstSource;
+    if (source == null) return const [];
+    final api = DanmakuApi.of(source);
     try {
-      return await api.episodes(anime.id);
+      return await api.episodes(anime.id, sourceId: source.id);
     } catch (e) {
       error = '$e';
       return const [];
+    } finally {
+      api.close();
     }
   }
 
   /// Manual pick from the search panel.
   Future<bool> loadEpisode(DanmakuEpisode episode) async {
+    final source = _sourceById(episode.sourceId) ?? _firstSource;
+    if (source == null) return false;
     status = DanmakuStatus.matching;
-    matchedTitle = episode.title;
+    if (episode.title.isNotEmpty) matchedTitle = episode.title;
+    matchedSource = source;
     _notify();
+    final api = DanmakuApi.of(source);
     try {
-      await _apply(episode.id);
+      final list = await api.comments(episode.id);
+      if (_disposed) return false;
+      comments = list;
+      store.replaceAll(list);
+      status = store.isEmpty ? DanmakuStatus.empty : DanmakuStatus.ready;
+      _notify();
+      onData?.call();
       return store.isNotEmpty;
     } catch (e) {
       if (_disposed) return false;
@@ -278,6 +284,8 @@ class DanmakuSession extends ChangeNotifier {
       error = '$e';
       _notify();
       return false;
+    } finally {
+      api.close();
     }
   }
 

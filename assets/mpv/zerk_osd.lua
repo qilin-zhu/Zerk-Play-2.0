@@ -45,6 +45,8 @@ local L = {
   stereo_downmix = "Stereo downmix", stereo_downmix_detail = "Clearer voices on TV speakers", on = "On",
   danmaku = "Danmaku", danmaku_hide = "Hide comments", danmaku_show = "Show comments",
   danmaku_count = "{n} comments", danmaku_none = "No comments for this episode",
+  danmaku_search = "Search comments", danmaku_results = "Search comments",
+  close = "Close",
   danmaku_off = "Turn off in Settings",
 }
 
@@ -120,7 +122,7 @@ local S = {
   scope = 0, anamorphic = 1, autocrop = false, crop = nil, margin = 0, crop_hits = 0,
   hits = {},
   pointer = false, hover = nil, mouse_x = 0,
-  danmaku = { enabled = false, visible = true, count = 0 },
+  danmaku = { enabled = false, visible = true, count = 0, info = nil, results = nil, stage = "anime" },
 }
 
 local W, H = 1920, 1080
@@ -510,14 +512,26 @@ open_panel = function(kind)
   elseif kind == "chapters" then p.title, p.items = tr("chapters"), chapter_items()
   elseif kind == "danmaku" then
     p.title = tr("danmaku")
+    p.subhead = S.danmaku.info
+    p.items = {
+      { id = "close", label = tr("close") },
+    }
     if S.danmaku.count > 0 then
-      p.subhead = tr("danmaku_count", S.danmaku.count)
-      p.items = {
-        { id = "toggle", label = S.danmaku.visible and tr("danmaku_hide") or tr("danmaku_show"), selected = S.danmaku.visible },
+      p.items[#p.items + 1] = {
+        id = "toggle",
+        label = S.danmaku.visible and tr("danmaku_hide") or tr("danmaku_show"),
+        selected = S.danmaku.visible,
       }
-    else
-      p.items = { { label = tr("danmaku_none"), inert = true } }
     end
+    p.items[#p.items + 1] = { id = "search", label = tr("danmaku_search") }
+  elseif kind == "danmaku-results" then
+    p.title = tr("danmaku_results")
+    local r = S.danmaku.results
+    p.items = {}
+    for _, it in ipairs(r and r.items or {}) do
+      p.items[#p.items + 1] = { id = it.id, label = it.label, detail = it.detail }
+    end
+    if #p.items == 0 then p.items = { { label = tr("danmaku_none"), inert = true } } end
   elseif kind == "settings" then p.title, p.items = tr("settings"), settings_items()
   elseif kind == "version" then
     p.title, p.items = S.versions_title or tr("version"), {}
@@ -579,7 +593,22 @@ local function panel_activate(item)
     if sub_panels[item.id] then open_panel(sub_panels[item.id])
     else send("sub", tostring(item.id)); S.panel = nil end
   elseif p.kind == "danmaku" then
-    if item.id == "toggle" then dm_set_visible(not S.danmaku.visible) end
+    if item.id == "toggle" then
+      dm_set_visible(not S.danmaku.visible)
+      S.panel = nil
+    elseif item.id == "search" then
+      S.danmaku.results = nil
+      S.danmaku.stage = "anime"
+      send("danmaku", "search")
+      S.toast, S.toast_until = tr("searching"), now() + 4
+      S.panel = nil
+    else
+      S.panel = nil
+    end
+  elseif p.kind == "danmaku-results" then
+    if not item.inert then
+      send("danmaku", (S.danmaku.stage == "episode" and "episode:" or "anime:") .. tostring(item.id))
+    end
     S.panel = nil
   elseif p.kind == "chapters" then mp.commandv("seek", item.id, "absolute+exact"); S.panel = nil
   elseif p.kind == "settings" then
@@ -1854,6 +1883,7 @@ mp.register_script_message("danmaku", function(raw)
   local d = json(raw) or {}
   S.danmaku.enabled = d.enabled == true
   S.danmaku.visible = d.visible ~= false
+  S.danmaku.info = d.info
   dm_apply_options(d)
   DM.list = {}
   for _, c in ipairs(type(d.comments) == "table" and d.comments or {}) do
@@ -1873,6 +1903,16 @@ mp.register_script_message("danmaku", function(raw)
   S.danmaku.count = #DM.list
   dm_layout()
   if dm_active() then dm_kick() else dm_wipe() end
+  render()
+end)
+
+-- Answers to a search: either the shows that matched, or their episodes.
+mp.register_script_message("danmaku-results", function(raw)
+  local d = json(raw) or {}
+  S.danmaku.results = d
+  S.danmaku.stage = d.stage == "episode" and "episode" or "anime"
+  S.toast = nil
+  open_panel("danmaku-results")
   render()
 end)
 
