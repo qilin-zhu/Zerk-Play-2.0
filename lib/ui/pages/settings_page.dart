@@ -15,6 +15,7 @@ import '../../data/xtream/live_catalog.dart';
 import '../../data/xtream/xtream.dart';
 import '../../data/metadata_localizer.dart';
 import '../../l10n/l10n.dart';
+import '../../playback/danmaku/danmaku_settings.dart';
 import '../../playback/language.dart';
 import '../../playback/mpv_conf.dart';
 import '../../playback/player_settings.dart';
@@ -81,17 +82,24 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   _Section _section = _Section.playback;
   PlayerSettings? _player;
+  DanmakuSettings? _danmaku;
   DisplayHdrStatus? _display;
 
   @override
   void initState() {
     super.initState();
     PlayerSettings.load().then((p) => mounted ? setState(() => _player = p) : null);
+    DanmakuSettings.load().then((d) => mounted ? setState(() => _danmaku = d) : null);
     if (Host.isWindows) NativeWindow.hdrStatus().then((d) => mounted ? setState(() => _display = d) : null);
   }
 
   Future<void> _savePlayer(PlayerSettings next) async {
     setState(() => _player = next);
+    await next.save();
+  }
+
+  Future<void> _saveDanmaku(DanmakuSettings next) async {
+    setState(() => _danmaku = next);
     await next.save();
   }
 
@@ -189,6 +197,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final app = services.settings;
     final l10n = context.l10n;
     final languages = {'': l10n.languageFromFile, ...languageNames};
+    final danmaku = _danmaku ?? const DanmakuSettings();
     switch (section) {
       case _Section.playback:
         return [
@@ -210,6 +219,33 @@ class _SettingsPageState extends State<SettingsPage> {
               onChanged: (v) => _savePlayer(p.copyWith(autoPlayNextEpisode: v))),
           SettingToggleRow(title: l10n.autoSkipIntro, value: p.skipIntroAutomatically,
               onChanged: (v) => _savePlayer(p.copyWith(skipIntroAutomatically: v))),
+          SettingHeader(l10n.danmakuHeader),
+          SettingToggleRow(
+            title: l10n.danmakuEnabled,
+            subtitle: l10n.danmakuHint,
+            value: danmaku.enabled,
+            onChanged: (v) => _saveDanmaku(danmaku.copyWith(enabled: v)),
+          ),
+          if (danmaku.enabled) ...[
+            SettingTextRow(
+              title: l10n.danmakuServer,
+              value: danmaku.server,
+              hint: l10n.danmakuServerHint,
+              onChanged: (v) => _saveDanmaku(danmaku.copyWith(server: v)),
+            ),
+            SettingTextRow(
+              title: l10n.danmakuAppId,
+              value: danmaku.appId,
+              hint: l10n.danmakuAppIdHint,
+              onChanged: (v) => _saveDanmaku(danmaku.copyWith(appId: v)),
+            ),
+            SettingTextRow(
+              title: l10n.danmakuAppSecret,
+              value: danmaku.appSecret,
+              obscure: true,
+              onChanged: (v) => _saveDanmaku(danmaku.copyWith(appSecret: v)),
+            ),
+          ],
           SettingHeader(l10n.settingsGroupSeeking),
           SettingChoiceRow<int>(
             title: l10n.seekForwardStep,

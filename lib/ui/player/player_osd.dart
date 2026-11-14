@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../l10n/l10n.dart';
+import '../../playback/danmaku/danmaku_layer.dart';
 import '../../playback/media3/osd_model.dart';
 import '../../playback/player_backend.dart';
 import '../../playback/subtitle_delay.dart';
@@ -727,6 +728,10 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
                 onTap: _onSurfaceTap,
               ),
             ),
+          // Sits above the video (a native window on the mpv backend) and below
+          // the controls, and never takes pointer events.
+          if (!loading && !error)
+            Positioned.fill(child: IgnorePointer(child: DanmakuLayer(model: model))),
           if (!loading && !error && s.buffering && !s.paused)
             const Center(child: SizedBox(width: 72, height: 72, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 5))),
           if (!loading && !error)

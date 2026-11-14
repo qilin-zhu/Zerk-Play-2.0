@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+  canvas_danmaku: ^0.3.4
+  crypto: ^3.0.6
   ffi: ^2.1.4
   http: ^1.5.0
   intl: any
