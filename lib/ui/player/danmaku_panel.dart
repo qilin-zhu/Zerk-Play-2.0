@@ -65,7 +65,7 @@ String? _header(L10n l10n, DanmakuSession session) {
     DanmakuStatus.matching => l10n.danmakuSearching,
     DanmakuStatus.ready => [
         ?session.matchedTitle,
-        l10n.danmakuCount(session.count),
+        l10n.danmakuCount('${session.count}'),
       ].join(' · '),
     DanmakuStatus.empty => l10n.danmakuEmpty,
     DanmakuStatus.failed => l10n.danmakuFailed,
@@ -105,7 +105,7 @@ Future<void> _search(
         PanelOption(
           value: a,
           title: a.title,
-          subtitle: [a.kind, if (a.episodeCount != null) l10n.danmakuEpisodeCount(a.episodeCount!)]
+          subtitle: [a.kind, if (a.episodeCount != null) l10n.danmakuEpisodeCount('${a.episodeCount!}')]
               .whereType<String>()
               .join(' · '),
         ),
@@ -129,5 +129,5 @@ Future<void> _search(
   if (episode == null) return;
 
   final loaded = await session.loadEpisode(episode);
-  toast(loaded ? l10n.danmakuLoaded(session.count) : l10n.danmakuEmpty);
+  toast(loaded ? l10n.danmakuLoaded('${session.count}') : l10n.danmakuEmpty);
 }
