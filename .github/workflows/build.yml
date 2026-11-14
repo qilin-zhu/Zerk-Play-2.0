@@ -8,6 +8,12 @@ on:
       - '**.md'
       - 'screenshots/**'
 
+env:
+  # The toolchain this project was created with (.metadata revision 4cf24164).
+  # Newer stable releases require a higher Android Gradle Plugin than the
+  # project uses, which breaks the build.
+  FLUTTER_VERSION: '3.47.0'
+
 jobs:
   android:
     name: Android APK
@@ -25,7 +31,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.0'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
@@ -51,4 +57,85 @@ jobs:
         with:
           name: ZerkPlay-android-apk
           path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Show toolchain
+        run: flutter --version
+
+      # The app loads libmpv at runtime with DynamicLibrary.open('libmpv-2.dll'),
+      # and windows/CMakeLists.txt installs windows/libs/libmpv-2.dll next to the
+      # executable, so the DLL only has to be in place before the build.
+      - name: Fetch libmpv
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rel = Invoke-RestMethod -Headers @{ 'User-Agent' = 'zerk-play-ci' } `
+            -Uri 'https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest'
+          $asset = $rel.assets |
+            Where-Object { $_.name -match '^mpv-dev-x86_64-\d{8}-.+\.7z$' } |
+            Select-Object -First 1
+          if (-not $asset) { throw 'No mpv-dev-x86_64 asset in the latest mpv build' }
+          Write-Host "Using $($asset.name) ($([math]::Round($asset.size / 1MB, 1)) MB)"
+
+          $archive = Join-Path $env:RUNNER_TEMP $asset.name
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
+
+          $dest = Join-Path $env:RUNNER_TEMP 'mpv-dev'
+          Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue
+          & 7z x $archive "-o$dest" -y | Out-Null
+
+          $dll = Get-ChildItem $dest -Recurse -Filter 'libmpv-2.dll' |
+            Select-Object -First 1
+          if (-not $dll) { throw 'libmpv-2.dll not found in the mpv dev package' }
+
+          New-Item -ItemType Directory -Force -Path 'windows/libs' | Out-Null
+          Copy-Item $dll.FullName 'windows/libs/libmpv-2.dll' -Force
+          Get-Item 'windows/libs/libmpv-2.dll' | Select-Object Name, Length
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate localizations
+        run: flutter gen-l10n
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = 'build\windows\x64\runner\Release'
+          if (-not (Test-Path (Join-Path $src 'zerk_play.exe'))) {
+            throw "zerk_play.exe missing in $src"
+          }
+          if (-not (Test-Path (Join-Path $src 'libmpv-2.dll'))) {
+            throw 'libmpv-2.dll was not bundled next to the executable'
+          }
+          Compress-Archive -Path (Join-Path $src '*') `
+            -DestinationPath 'ZerkPlay-windows-x64-zh.zip' -Force
+          Get-Item 'ZerkPlay-windows-x64-zh.zip' | Select-Object Name, Length
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZerkPlay-windows-x64
+          path: ZerkPlay-windows-x64-zh.zip
           if-no-files-found: error
