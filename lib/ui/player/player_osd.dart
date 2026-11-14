@@ -120,6 +120,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
   bool _nextCancelled = false;
   String _lastPhase = '';
   String _pushedPhase = '';
+  DanmakuAnime? _pendingAnime;
   late final _countdown = AnimationController(vsync: this)
     ..addStatusListener((s) => s == AnimationStatus.completed ? _playNext() : null);
   bool _countdownStarted = false;
@@ -244,7 +245,10 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
 
   Future<void> _danmakuSearch() async {
     final l10n = context.l10n;
-    final keyword = _danmaku.query.isNotEmpty ? _danmaku.query : model.title;
+    // The search endpoint wants a show name. Sending the episode-qualified
+    // query ("Show S01E05") returns nothing at all, which looked like the site
+    // having no comments.
+    final keyword = model.title.trim().isNotEmpty ? model.title.trim() : _danmaku.query;
     final hits = await _danmaku.search(keyword);
     if (!mounted) return;
     model.osd?.call('danmaku-results', {
@@ -254,7 +258,10 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
           {
             'id': '${a.sourceId}#${a.id}',
             'label': a.title,
+            // The provider is buried at the end of the title and gets clipped
+            // in the panel, so lead the second line with it.
             'detail': [
+              ?_providerOf(a.title),
               if (a.episodeCount != null) l10n.danmakuEpisodeCount('${a.episodeCount}'),
               ?a.kind,
             ].join(' · '),
@@ -263,10 +270,21 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
     });
   }
 
-  Future<void> _danmakuEpisodes(String ref) async {
+  /// `... from tencent` is how an aggregating server marks the upstream site.
+  static String? _providerOf(String title) {
+    final m = RegExp(r'from\s+([^\s\]]+)\s*$', caseSensitive: false).firstMatch(title);
+    return m?.group(1);
+  }
+
+  Future<void> _danmakuEpisodes(String payload) async {
+    final bar = payload.indexOf('|');
+    final ref = bar < 0 ? payload : payload.substring(0, bar);
+    final label = bar < 0 ? '' : payload.substring(bar + 1);
     final (sourceId, id) = _parseRef(ref);
     if (id == null) return;
-    final episodes = await _danmaku.episodes(DanmakuAnime(id: id, title: '', sourceId: sourceId));
+    final anime = DanmakuAnime(id: id, title: label, sourceId: sourceId);
+    _pendingAnime = anime;
+    final episodes = await _danmaku.episodes(anime);
     if (!mounted) return;
     model.osd?.call('danmaku-results', {
       'stage': 'episode',
@@ -277,9 +295,15 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
     });
   }
 
-  Future<void> _danmakuPick(String ref) async {
+  Future<void> _danmakuPick(String payload) async {
+    // `<sourceId>#<id>|<label>`, so the info line can name the show and episode.
+    final bar = payload.indexOf('|');
+    final ref = bar < 0 ? payload : payload.substring(0, bar);
+    final label = bar < 0 ? '' : payload.substring(bar + 1);
     final (sourceId, id) = _parseRef(ref);
     if (id == null) return;
+    final title = [_pendingAnime?.title ?? '', label].where((s) => s.isNotEmpty).join(' · ');
+    if (title.isNotEmpty) _danmaku.matchedTitle = title;
     final ok = await _danmaku.loadEpisode(DanmakuEpisode(id: id, title: '', sourceId: sourceId));
     if (!mounted) return;
     model.onToast?.call(ok ? context.l10n.danmakuLoaded('${_danmaku.count}') : context.l10n.danmakuEmpty);

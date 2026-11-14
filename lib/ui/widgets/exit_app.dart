@@ -1,7 +1,8 @@
-import 'dart:ui' show AppExitType;
+import 'dart:ui' show AppExitResponse, AppExitType;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../core/host.dart';
 import '../../l10n/l10n.dart';
@@ -26,9 +27,22 @@ Future<void> confirmExit(BuildContext context) async {
 Future<void> exitApp() async {
   if (Host.isAndroid) {
     await SystemNavigator.pop();
-  } else {
-    await ServicesBinding.instance.exitApplication(AppExitType.cancelable);
+    return;
   }
+  // Closing the window quits immediately because it never waits for the
+  // shutdown hook, which can idle for seconds handing HDR and the refresh rate
+  // back. Give that hook a short moment, then close the window regardless so
+  // the button feels the same as the title bar.
+  try {
+    await ServicesBinding.instance
+        .exitApplication(AppExitType.cancelable)
+        .timeout(const Duration(milliseconds: 800), onTimeout: () => AppExitResponse.cancel);
+  } catch (_) {
+    // The engine may already be tearing down; fall through to the hard close.
+  }
+  try {
+    await windowManager.destroy();
+  } catch (_) {}
 }
 
 class _ExitDialog extends StatelessWidget {

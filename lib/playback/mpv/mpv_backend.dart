@@ -135,6 +135,7 @@ final class MpvBackend implements PlayerBackend {
         'danmaku_none': l.danmakuEmpty,
         'danmaku_search': l.danmakuSearch,
         'danmaku_results': l.danmakuSearch,
+        'danmaku_no_results': l.danmakuSearchEmpty,
         'close': l.close,
         'full_screen': l.fullScreen,
         'off': l.subtitleOff,

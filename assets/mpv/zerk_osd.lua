@@ -46,6 +46,7 @@ local L = {
   danmaku = "Danmaku", danmaku_hide = "Hide comments", danmaku_show = "Show comments",
   danmaku_count = "{n} comments", danmaku_none = "No comments for this episode",
   danmaku_search = "Search comments", danmaku_results = "Search comments",
+  danmaku_no_results = "No shows matched",
   close = "Close",
   danmaku_off = "Turn off in Settings",
 }
@@ -531,7 +532,7 @@ open_panel = function(kind)
     for _, it in ipairs(r and r.items or {}) do
       p.items[#p.items + 1] = { id = it.id, label = it.label, detail = it.detail }
     end
-    if #p.items == 0 then p.items = { { label = tr("danmaku_none"), inert = true } } end
+    if #p.items == 0 then p.items = { { label = tr("danmaku_no_results"), inert = true } } end
   elseif kind == "settings" then p.title, p.items = tr("settings"), settings_items()
   elseif kind == "version" then
     p.title, p.items = S.versions_title or tr("version"), {}
@@ -607,7 +608,9 @@ local function panel_activate(item)
     end
   elseif p.kind == "danmaku-results" then
     if not item.inert then
-      send("danmaku", (S.danmaku.stage == "episode" and "episode:" or "anime:") .. tostring(item.id))
+      local prefix = S.danmaku.stage == "episode" and "episode:" or "anime:"
+      -- The label rides along so the panel header can name the show and episode.
+      send("danmaku", prefix .. tostring(item.id) .. "|" .. tostring(item.label or ""))
     end
     S.panel = nil
   elseif p.kind == "chapters" then mp.commandv("seek", item.id, "absolute+exact"); S.panel = nil

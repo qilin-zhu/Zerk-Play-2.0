@@ -110,8 +110,11 @@ class _ZerkAppState extends State<ZerkApp> {
       },
       onExitRequested: () async {
         debugPrint('[app] exit requested');
-        await KeptDisplay.restore();
-        await AppLog.flush();
+        // Quitting must not hang: handing the display back (HDR and refresh
+        // rate) can sit for seconds, and closing the window does not wait for
+        // it at all. Bound both so the button behaves like the window.
+        await KeptDisplay.restore().timeout(const Duration(milliseconds: 500), onTimeout: () {});
+        await AppLog.flush().timeout(const Duration(milliseconds: 300), onTimeout: () {});
         return AppExitResponse.exit;
       },
     );
