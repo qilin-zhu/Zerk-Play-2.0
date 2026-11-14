@@ -1794,10 +1794,10 @@ local function dm_draw()
       end
     end
   end
-  dm_low.res_x, dm_low.res_y, dm_low.z = DM_W, DM_H, 0
+  dm_low.res_x, dm_low.res_y, dm_low.z = DM_W, DM_H, -2
   dm_low.data = table.concat(low, "\n")
   dm_low:update()
-  dm_high.res_x, dm_high.res_y, dm_high.z = DM_W, DM_H, 1
+  dm_high.res_x, dm_high.res_y, dm_high.z = DM_W, DM_H, -1
   dm_high.data = table.concat(high, "\n")
   dm_high:update()
 end
