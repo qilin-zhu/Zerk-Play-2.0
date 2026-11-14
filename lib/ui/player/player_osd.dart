@@ -135,14 +135,24 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
   @override
   void initState() {
     super.initState();
-    _danmaku = DanmakuSession(model);
-    unawaited(_danmaku.init());
     model.addListener(_onModel);
     model.state.addListener(_onState);
     model.onToast = (text, {image, name}) {
       if (!mounted) return;
       showToast(context, text, leading: image == null ? null : UserAvatar(url: image, name: name ?? '', size: 44));
     };
+    _danmaku = DanmakuSession(model);
+    _danmaku.onResult = (status, count) {
+      if (!mounted) return;
+      final text = switch (status) {
+        DanmakuStatus.ready => context.l10n.danmakuLoaded(count),
+        DanmakuStatus.empty => context.l10n.danmakuEmpty,
+        DanmakuStatus.failed => context.l10n.danmakuFailed,
+        DanmakuStatus.matching || DanmakuStatus.off => null,
+      };
+      if (text != null) model.onToast?.call(text);
+    };
+    unawaited(_danmaku.init());
     WidgetsBinding.instance.addPostFrameCallback((_) => _root.requestFocus());
   }
 

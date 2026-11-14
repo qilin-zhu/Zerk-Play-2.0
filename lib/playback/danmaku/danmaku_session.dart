@@ -50,6 +50,10 @@ class DanmakuSession extends ChangeNotifier {
 
   bool visible = true;
 
+  /// Called after every automatic attempt so the player can say what happened.
+  /// Silence is the worst outcome here: an empty screen looks like a bug.
+  void Function(DanmakuStatus status, int count)? onResult;
+
   bool _started = false;
   bool _disposed = false;
   DanmakuApi? _api;
@@ -106,12 +110,31 @@ class DanmakuSession extends ChangeNotifier {
 
   /// Prefer `Series S01E02` — the server matches on normalised names, and the
   /// episode code lives in the OSD subtitle for episodes.
+  ///
+  /// Emby renders the code as `S1 · E5`, so a naive `S\d+E\d+` misses it and
+  /// the request goes out with the bare show name. That matches the wrong
+  /// title: `玫瑰战争` alone resolves to a 2025 film called `玫瑰`, not to the
+  /// series' fifth episode.
   String _query() {
     final title = _model.title.trim();
     if (title.isEmpty) return '';
-    final code = RegExp(r'S\d{1,4}\s*E\d{1,4}', caseSensitive: false).firstMatch(_model.subtitle)?.group(0);
-    if (code == null) return title;
-    return '$title ${code.toUpperCase().replaceAll(RegExp(r'\s+'), '')}';
+    final subtitle = _model.subtitle;
+
+    String pad(String digits) => digits.padLeft(2, '0');
+
+    final code = RegExp(r'S\s*(\d{1,3})\W*E\s*(\d{1,4})', caseSensitive: false).firstMatch(subtitle);
+    if (code != null) {
+      return '$title S${pad(code.group(1)!)}E${pad(code.group(2)!)}';
+    }
+
+    // Some servers only show "第 5 集".
+    final chinese = RegExp(r'第\s*(\d{1,4})\s*集').firstMatch(subtitle);
+    if (chinese != null) {
+      final season = RegExp(r'S\s*(\d{1,3})', caseSensitive: false).firstMatch(subtitle)?.group(1) ?? '1';
+      return '$title S${pad(season)}E${pad(chinese.group(1)!)}';
+    }
+
+    return title;
   }
 
   Future<void> _match(String name) async {
@@ -126,15 +149,18 @@ class DanmakuSession extends ChangeNotifier {
         store.clear();
         status = DanmakuStatus.empty;
         _notify();
+        onResult?.call(status, 0);
         return;
       }
       matchedTitle = result.title ?? name;
       await _apply(id);
+      onResult?.call(status, store.count);
     } catch (e) {
       if (_disposed) return;
       status = DanmakuStatus.failed;
       error = '$e';
       _notify();
+      onResult?.call(status, 0);
     }
   }
 
