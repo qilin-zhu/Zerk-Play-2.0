@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../../l10n/l10n.dart';
 import '../../playback/danmaku/danmaku_layer.dart';
+import '../../playback/danmaku/danmaku_session.dart';
 import '../../playback/media3/osd_model.dart';
 import '../../playback/player_backend.dart';
 import '../../playback/subtitle_delay.dart';
@@ -22,6 +23,7 @@ import '../widgets/profile_widgets.dart';
 import '../widgets/side_panel.dart';
 import '../widgets/value_slider.dart';
 import '../widgets/wall_clock.dart';
+import 'danmaku_panel.dart';
 import 'player_loading.dart';
 
 class _ScreenBand extends StatelessWidget {
@@ -99,6 +101,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
 
   final _root = FocusNode(debugLabel: 'osd-root');
   final _playButton = FocusNode(debugLabel: 'osd-play');
+  late final DanmakuSession _danmaku;
   bool _visible = false;
   bool _panelOpen = false;
   Timer? _hideTimer;
@@ -132,6 +135,8 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
   @override
   void initState() {
     super.initState();
+    _danmaku = DanmakuSession(model);
+    unawaited(_danmaku.init());
     model.addListener(_onModel);
     model.state.addListener(_onState);
     model.onToast = (text, {image, name}) {
@@ -143,6 +148,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
 
   @override
   void dispose() {
+    _danmaku.dispose();
     model.removeListener(_onModel);
     model.state.removeListener(_onState);
     model.onToast = null;
@@ -319,6 +325,14 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
       return;
     }
     if (chosen != null) model.send('audio', chosen);
+  }
+
+  Future<void> _chooseDanmaku() async {
+    _panelOpen = true;
+    await showDanmakuPanel(context, _danmaku, toast: (text) => model.onToast?.call(text));
+    if (!mounted) return;
+    _panelOpen = false;
+    _armHide();
   }
 
   Future<void> _chooseSubtitles() async {
@@ -731,7 +745,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
           // Sits above the video (a native window on the mpv backend) and below
           // the controls, and never takes pointer events.
           if (!loading && !error)
-            Positioned.fill(child: IgnorePointer(child: DanmakuLayer(model: model))),
+            Positioned.fill(child: IgnorePointer(child: DanmakuLayer(model: model, session: _danmaku))),
           if (!loading && !error && s.buffering && !s.paused)
             const Center(child: SizedBox(width: 72, height: 72, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 5))),
           if (!loading && !error)
@@ -921,6 +935,8 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
                 TvButton(label: l10n.subtitles, icon: Icons.subtitles_outlined, onSelect: _chooseSubtitles),
                 const SizedBox(width: 18),
               ],
+              TvButton(label: l10n.danmakuHeader, icon: Icons.forum_rounded, onSelect: _chooseDanmaku),
+              const SizedBox(width: 18),
               if (model.chapters.length > 1) ...[
                 TvButton(label: l10n.chapters, icon: Icons.list_rounded, onSelect: _chooseChapter),
                 const SizedBox(width: 18),

@@ -148,10 +148,47 @@
   "danmakuEnabled": "Bullet comments",
   "danmakuHint": "Looks up comments for whatever is playing on dandanplay. Anime matches best; most films and series have none.",
   "danmakuServer": "Danmaku server",
-  "danmakuServerHint": "The dandanplay API, or the address of a self-hosted danmu_api",
+  "danmakuServerHint": "The dandanplay API, or a self-hosted danmu_api. danmu_api serves its API under the token, e.g. http://192.168.1.7:9321/87654321",
   "danmakuAppId": "AppId",
   "danmakuAppIdHint": "Only the official dandanplay API needs this. Leave empty for a self-hosted server.",
   "danmakuAppSecret": "AppSecret",
+  "danmakuTurnOn": "Turn on",
+  "danmakuTurnOff": "Turn off",
+  "danmakuHide": "Hide comments",
+  "danmakuShow": "Show comments",
+  "danmakuSearch": "Search comments",
+  "danmakuSearchHint": "Show or film name",
+  "danmakuSearching": "Searching…",
+  "danmakuSearchEmpty": "Nothing found. Try another name.",
+  "danmakuReload": "Match again",
+  "danmakuDisabledHint": "Comments are off. Turn them on here, or in Settings, Playback, Danmaku.",
+  "danmakuNotConfigured": "No danmaku server set up yet",
+  "danmakuEmpty": "No comments for this episode",
+  "danmakuFailed": "Could not reach the danmaku server",
+  "danmakuCount": "{count} comments",
+  "@danmakuCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "danmakuLoaded": "Loaded {count} comments",
+  "@danmakuLoaded": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "danmakuEpisodeCount": "{count} episodes",
+  "@danmakuEpisodeCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "audio": "Audio",
   "sectionLanguages": "Languages & subtitles",
   "sectionMetadata": "Metadata",

@@ -23,6 +23,8 @@ final class DanmakuSettings {
 
   final bool enabled;
 
+  /// May carry a path: `danmu_api` serves everything under its token, e.g.
+  /// `http://192.168.1.7:9321/87654321`.
   final String server;
 
   /// dandanplay developer credentials. Empty means "no signing", which is what
