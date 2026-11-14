@@ -81,10 +81,26 @@ jobs:
       # executable, so the DLL only has to be in place before the build.
       - name: Fetch libmpv
         shell: pwsh
+        env:
+          # Anonymous calls to api.github.com are rate limited per runner IP and
+          # fail intermittently; the workflow token gets its own quota.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $rel = Invoke-RestMethod -Headers @{ 'User-Agent' = 'zerk-play-ci' } `
-            -Uri 'https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest'
+          $api = 'https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest'
+          $headers = @{ 'User-Agent' = 'zerk-play-ci'; 'Accept' = 'application/vnd.github+json' }
+          if ($env:GH_TOKEN) { $headers['Authorization'] = "Bearer $($env:GH_TOKEN)" }
+          $rel = $null
+          for ($i = 1; $i -le 4; $i++) {
+            try {
+              $rel = Invoke-RestMethod -Headers $headers -Uri $api
+              break
+            } catch {
+              if ($i -eq 4) { throw }
+              Write-Host "release lookup failed (attempt $i): $_"
+              Start-Sleep -Seconds (5 * $i)
+            }
+          }
           $asset = $rel.assets |
             Where-Object { $_.name -match '^mpv-dev-x86_64-\d{8}-.+\.7z$' } |
             Select-Object -First 1

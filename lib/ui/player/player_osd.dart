@@ -145,7 +145,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
     _danmaku.onResult = (status, count) {
       if (!mounted) return;
       final text = switch (status) {
-        DanmakuStatus.ready => context.l10n.danmakuLoaded(count),
+        DanmakuStatus.ready => context.l10n.danmakuLoaded('$count'),
         DanmakuStatus.empty => context.l10n.danmakuEmpty,
         DanmakuStatus.failed => context.l10n.danmakuFailed,
         DanmakuStatus.matching || DanmakuStatus.off => null,
