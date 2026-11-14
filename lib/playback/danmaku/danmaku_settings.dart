@@ -2,76 +2,103 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Danmaku (bullet comment) preferences.
-///
-/// Kept apart from [PlayerSettings] on purpose: danmaku is optional, most users
-/// never touch it, and it carries its own server credentials.
+import 'danmaku_source.dart';
+
+/// Danmaku preferences, kept apart from [PlayerSettings] because the feature is
+/// optional and carries its own source list.
 final class DanmakuSettings {
   const DanmakuSettings({
     this.enabled = false,
-    this.server = defaultServer,
-    this.appId = '',
-    this.appSecret = '',
+    this.sources = const [kDandanplaySource],
     this.offsetMs = 0,
-    this.opacity = 0.9,
-    this.fontSize = 22,
+    this.opacity = 1.0,
+    this.scale = 1.0,
+    this.speed = 1.0,
+    this.syncSpeed = true,
+    this.bold = false,
+    this.scrollLines = 5,
+    this.topLines = 1,
+    this.bottomLines = 3,
+    this.lineGap = 4,
+    this.rememberManual = true,
   });
-
-  /// The public dandanplay API. A self hosted `danmu_api` instance speaks the
-  /// same protocol and needs no credentials at all.
-  static const defaultServer = 'https://api.dandanplay.net';
 
   final bool enabled;
 
-  /// May carry a path: `danmu_api` serves everything under its token, e.g.
-  /// `http://192.168.1.7:9321/87654321`.
-  final String server;
+  /// In priority order: the first source with comments for the episode wins.
+  final List<DanmakuSource> sources;
 
-  /// dandanplay developer credentials. Empty means "no signing", which is what
-  /// a self hosted server expects.
-  final String appId;
-  final String appSecret;
-
-  /// Shifts the danmaku timeline. Different releases have different lead-ins,
-  /// so this is the difference between usable and useless.
+  /// Shifts the timeline; releases differ in how much lead-in they have.
   final int offsetMs;
 
   final double opacity;
-  final double fontSize;
+  final double scale;
+  final double speed;
+  final bool syncSpeed;
+  final bool bold;
 
-  bool get hasCredentials => appId.trim().isNotEmpty && appSecret.trim().isNotEmpty;
+  final int scrollLines;
+  final int topLines;
+  final int bottomLines;
 
-  String get baseUrl => server.trim().replaceAll(RegExp(r'/+$'), '');
+  /// Pixels between lines.
+  final int lineGap;
 
-  bool get usable => enabled && baseUrl.isNotEmpty;
+  /// Remember the episode picked by hand for the next playback.
+  final bool rememberManual;
+
+  List<DanmakuSource> get usableSources => [
+        for (final s in sources)
+          if (s.usable) s,
+      ];
+
+  bool get usable => enabled && usableSources.isNotEmpty;
 
   DanmakuSettings copyWith({
     bool? enabled,
-    String? server,
-    String? appId,
-    String? appSecret,
+    List<DanmakuSource>? sources,
     int? offsetMs,
     double? opacity,
-    double? fontSize,
+    double? scale,
+    double? speed,
+    bool? syncSpeed,
+    bool? bold,
+    int? scrollLines,
+    int? topLines,
+    int? bottomLines,
+    int? lineGap,
+    bool? rememberManual,
   }) =>
       DanmakuSettings(
         enabled: enabled ?? this.enabled,
-        server: server ?? this.server,
-        appId: appId ?? this.appId,
-        appSecret: appSecret ?? this.appSecret,
+        sources: sources ?? this.sources,
         offsetMs: offsetMs ?? this.offsetMs,
         opacity: opacity ?? this.opacity,
-        fontSize: fontSize ?? this.fontSize,
+        scale: scale ?? this.scale,
+        speed: speed ?? this.speed,
+        syncSpeed: syncSpeed ?? this.syncSpeed,
+        bold: bold ?? this.bold,
+        scrollLines: scrollLines ?? this.scrollLines,
+        topLines: topLines ?? this.topLines,
+        bottomLines: bottomLines ?? this.bottomLines,
+        lineGap: lineGap ?? this.lineGap,
+        rememberManual: rememberManual ?? this.rememberManual,
       );
 
   Map<String, Object?> toJson() => {
         'enabled': enabled,
-        'server': server,
-        'appId': appId,
-        'appSecret': appSecret,
+        'sources': [for (final s in sources) s.toJson()],
         'offsetMs': offsetMs,
         'opacity': opacity,
-        'fontSize': fontSize,
+        'scale': scale,
+        'speed': speed,
+        'syncSpeed': syncSpeed,
+        'bold': bold,
+        'scrollLines': scrollLines,
+        'topLines': topLines,
+        'bottomLines': bottomLines,
+        'lineGap': lineGap,
+        'rememberManual': rememberManual,
       };
 
   factory DanmakuSettings.fromJson(Map<String, dynamic> j) {
@@ -84,14 +111,40 @@ final class DanmakuSettings {
       return fallback;
     }
 
+    var sources = <DanmakuSource>[
+      for (final raw in (j['sources'] as List? ?? const [])) ?DanmakuSource.fromJson(raw),
+    ];
+
+    if (sources.isEmpty) {
+      // Settings written before sources existed carried a single server.
+      final legacy = pick('server', '');
+      sources = [
+        kDandanplaySource,
+        if (legacy.trim().isNotEmpty)
+          DanmakuSource(
+            id: 'custom',
+            name: '',
+            server: legacy,
+            appId: pick('appId', ''),
+            appSecret: pick('appSecret', ''),
+          ),
+      ];
+    }
+
     return DanmakuSettings(
       enabled: pick('enabled', d.enabled),
-      server: pick('server', d.server),
-      appId: pick('appId', d.appId),
-      appSecret: pick('appSecret', d.appSecret),
+      sources: sources,
       offsetMs: pick('offsetMs', d.offsetMs),
       opacity: pick('opacity', d.opacity).clamp(0.2, 1.0).toDouble(),
-      fontSize: pick('fontSize', d.fontSize).clamp(12.0, 48.0).toDouble(),
+      scale: pick('scale', d.scale).clamp(0.6, 1.8).toDouble(),
+      speed: pick('speed', d.speed).clamp(0.5, 2.0).toDouble(),
+      syncSpeed: pick('syncSpeed', d.syncSpeed),
+      bold: pick('bold', d.bold),
+      scrollLines: pick('scrollLines', d.scrollLines).clamp(1, 12),
+      topLines: pick('topLines', d.topLines).clamp(0, 4),
+      bottomLines: pick('bottomLines', d.bottomLines).clamp(0, 4),
+      lineGap: pick('lineGap', d.lineGap).clamp(0, 16),
+      rememberManual: pick('rememberManual', d.rememberManual),
     );
   }
 

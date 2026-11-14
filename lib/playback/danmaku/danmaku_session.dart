@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../media3/osd_model.dart';
 import 'danmaku_api.dart';
 import 'danmaku_settings.dart';
+import 'danmaku_source.dart';
 import 'danmaku_store.dart';
 
 enum DanmakuStatus {
@@ -68,7 +69,7 @@ class DanmakuSession extends ChangeNotifier {
 
   bool get enabled => settings.enabled;
 
-  bool get configured => settings.baseUrl.isNotEmpty;
+  bool get configured => settings.usableSources.isNotEmpty;
 
   /// Whether the overlay should paint anything.
   bool get rendering => enabled && visible && store.isNotEmpty;
@@ -77,18 +78,20 @@ class DanmakuSession extends ChangeNotifier {
 
   int get offsetMs => settings.offsetMs;
 
-  String get host {
-    final uri = Uri.tryParse(settings.baseUrl);
-    return uri == null ? settings.baseUrl : '${uri.host}:${uri.port}';
-  }
+  /// The source the comments actually came from, for the panel.
+  DanmakuSource? matchedSource;
+
+  String get host => matchedSource?.host ?? (settings.usableSources.isEmpty ? '' : settings.usableSources.first.host);
 
   List<DanmakuComment> at(int second) => store.at(second);
 
-  DanmakuApi get _client => _api ??= DanmakuApi(
-        server: settings.baseUrl,
-        appId: settings.appId,
-        appSecret: settings.appSecret,
-      );
+  DanmakuSource? get _firstSource => settings.usableSources.isEmpty ? null : settings.usableSources.first;
+
+  DanmakuApi? get _client {
+    final source = _firstSource;
+    if (source == null) return null;
+    return _api ??= DanmakuApi.of(source);
+  }
 
   @override
   void dispose() {
@@ -145,38 +148,53 @@ class DanmakuSession extends ChangeNotifier {
     return title;
   }
 
+  /// Walks the source list in the user's priority order: the first one that has
+  /// comments for this episode wins, later ones are never asked.
   Future<void> _match(String name) async {
     status = DanmakuStatus.matching;
     error = null;
     _notify();
-    try {
-      final result = await _client.match(name);
+
+    for (final source in settings.usableSources) {
       if (_disposed) return;
-      final id = result.episodeId;
-      if (id == null) {
-        store.clear();
-        comments = const [];
-        status = DanmakuStatus.empty;
+      final api = DanmakuApi.of(source);
+      try {
+        final result = await api.match(name);
+        final id = result.episodeId;
+        if (id == null) continue;
+        final list = await api.comments(id);
+        if (list.isEmpty) continue;
+        if (_disposed) return;
+        matchedSource = source;
+        matchedTitle = result.title ?? name;
+        comments = list;
+        store.replaceAll(list);
+        status = DanmakuStatus.ready;
         _notify();
-        onResult?.call(status, 0);
         onData?.call();
+        onResult?.call(status, store.count);
         return;
+      } catch (e) {
+        error = '$e';
+      } finally {
+        api.close();
       }
-      matchedTitle = result.title ?? name;
-      await _apply(id);
-      onResult?.call(status, store.count);
-    } catch (e) {
-      if (_disposed) return;
-      status = DanmakuStatus.failed;
-      error = '$e';
-      _notify();
-      onResult?.call(status, 0);
-      onData?.call();
     }
+
+    if (_disposed) return;
+    store.clear();
+    comments = const [];
+    status = DanmakuStatus.empty;
+    matchedSource = null;
+    _notify();
+    onResult?.call(status, 0);
+    onData?.call();
   }
 
   Future<void> _apply(int episodeId) async {
-    final list = await _client.comments(episodeId);
+    final api = _client;
+    if (api == null) return;
+    final list = await api.comments(episodeId);
     if (_disposed) return;
     comments = list;
     store.replaceAll(list);
@@ -214,6 +232,7 @@ class DanmakuSession extends ChangeNotifier {
     _started = false;
     store.clear();
     matchedTitle = null;
+    matchedSource = null;
     if (!settings.enabled) {
       status = DanmakuStatus.off;
       _notify();
@@ -224,9 +243,10 @@ class DanmakuSession extends ChangeNotifier {
   }
 
   Future<List<DanmakuAnime>> search(String keyword) async {
-    if (!configured) return const [];
+    final api = _client;
+    if (api == null) return const [];
     try {
-      return await _client.searchAnime(keyword);
+      return await api.searchAnime(keyword);
     } catch (e) {
       error = '$e';
       return const [];
@@ -234,9 +254,10 @@ class DanmakuSession extends ChangeNotifier {
   }
 
   Future<List<DanmakuEpisode>> episodes(DanmakuAnime anime) async {
-    if (!configured) return const [];
+    final api = _client;
+    if (api == null) return const [];
     try {
-      return await _client.episodes(anime.id);
+      return await api.episodes(anime.id);
     } catch (e) {
       error = '$e';
       return const [];

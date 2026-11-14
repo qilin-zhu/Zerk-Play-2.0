@@ -16,6 +16,7 @@ import '../../data/xtream/xtream.dart';
 import '../../data/metadata_localizer.dart';
 import '../../l10n/l10n.dart';
 import '../../playback/danmaku/danmaku_settings.dart';
+import '../../playback/danmaku/danmaku_source.dart';
 import '../../playback/language.dart';
 import '../../playback/mpv_conf.dart';
 import '../../playback/player_settings.dart';
@@ -33,6 +34,7 @@ import '../widgets/exit_app.dart';
 import '../widgets/media_row.dart';
 import '../widgets/remote_setup_panel.dart';
 import '../widgets/setting_rows.dart';
+import '../widgets/side_panel.dart';
 import '../widgets/subtitle_preview.dart';
 import '../widgets/update_dialog.dart';
 import '../widgets/value_slider.dart';
@@ -102,7 +104,6 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _danmaku = next);
     await next.save();
   }
-
   bool _sendingLogs = false;
 
   Future<void> _sendLogs(BuildContext context) async {
@@ -220,32 +221,20 @@ class _SettingsPageState extends State<SettingsPage> {
           SettingToggleRow(title: l10n.autoSkipIntro, value: p.skipIntroAutomatically,
               onChanged: (v) => _savePlayer(p.copyWith(skipIntroAutomatically: v))),
           SettingHeader(l10n.danmakuHeader),
-          SettingToggleRow(
-            title: l10n.danmakuEnabled,
-            subtitle: l10n.danmakuHint,
-            value: danmaku.enabled,
-            onChanged: (v) => _saveDanmaku(danmaku.copyWith(enabled: v)),
+          SettingActionRow(
+            title: l10n.danmakuSettings,
+            subtitle: danmaku.enabled
+                ? (danmaku.usableSources.isEmpty ? l10n.danmakuNoSource : l10n.danmakuSourceCount('${danmaku.usableSources.length}'))
+                : l10n.danmakuOffHint,
+            icon: Icons.forum_outlined,
+            onSelect: () async {
+              await Navigator.of(context).push(
+                tvRoute<void>(_DanmakuSettingsPage(initial: danmaku), name: 'settings/danmaku'),
+              );
+              final next = await DanmakuSettings.load();
+              if (mounted) setState(() => _danmaku = next);
+            },
           ),
-          if (danmaku.enabled) ...[
-            SettingTextRow(
-              title: l10n.danmakuServer,
-              value: danmaku.server,
-              hint: l10n.danmakuServerHint,
-              onChanged: (v) => _saveDanmaku(danmaku.copyWith(server: v)),
-            ),
-            SettingTextRow(
-              title: l10n.danmakuAppId,
-              value: danmaku.appId,
-              hint: l10n.danmakuAppIdHint,
-              onChanged: (v) => _saveDanmaku(danmaku.copyWith(appId: v)),
-            ),
-            SettingTextRow(
-              title: l10n.danmakuAppSecret,
-              value: danmaku.appSecret,
-              obscure: true,
-              onChanged: (v) => _saveDanmaku(danmaku.copyWith(appSecret: v)),
-            ),
-          ],
           SettingHeader(l10n.settingsGroupSeeking),
           SettingChoiceRow<int>(
             title: l10n.seekForwardStep,
@@ -987,3 +976,217 @@ class _LogsSentDialog extends StatelessWidget {
     );
   }
 }
+
+/// Danmaku lives on its own page: it is optional, its source list needs room,
+/// and the display options have nothing to do with the rest of playback.
+class _DanmakuSettingsPage extends StatefulWidget {
+  const _DanmakuSettingsPage({required this.initial});
+
+  final DanmakuSettings initial;
+
+  @override
+  State<_DanmakuSettingsPage> createState() => _DanmakuSettingsPageState();
+}
+
+class _DanmakuSettingsPageState extends State<_DanmakuSettingsPage> {
+  late DanmakuSettings _s = widget.initial;
+
+  Future<void> _save(DanmakuSettings next) async {
+    setState(() => _s = next);
+    await next.save();
+  }
+
+  String _nameOf(L10n l10n, DanmakuSource source) =>
+      source.builtIn ? l10n.danmakuSourceDandanplay : (source.name.isEmpty ? source.host : source.name);
+
+  Future<void> _editSource(int index, _SourceField field) async {
+    final l10n = context.l10n;
+    final source = _s.sources[index];
+    final value = await showTextInputDialog(
+      context,
+      title: switch (field) {
+        _SourceField.server => l10n.danmakuServer,
+        _SourceField.appId => l10n.danmakuAppId,
+        _SourceField.appSecret => l10n.danmakuAppSecret,
+      },
+      initial: switch (field) {
+        _SourceField.server => source.server,
+        _SourceField.appId => source.appId,
+        _SourceField.appSecret => source.appSecret,
+      },
+      hint: field == _SourceField.server ? l10n.danmakuServerHint : null,
+    );
+    if (value == null || !mounted) return;
+    final sources = [..._s.sources];
+    sources[index] = switch (field) {
+      _SourceField.server => source.copyWith(server: value.trim()),
+      _SourceField.appId => source.copyWith(appId: value.trim()),
+      _SourceField.appSecret => source.copyWith(appSecret: value.trim()),
+    };
+    await _save(_s.copyWith(sources: sources));
+  }
+
+  Future<void> _sourceActions(int index) async {
+    final l10n = context.l10n;
+    final source = _s.sources[index];
+    final chosen = await showSidePanel<String>(
+      context,
+      title: _nameOf(l10n, source),
+      header: source.usable ? source.baseUrl : l10n.danmakuSourceUnusable,
+      options: [
+        if (index > 0) PanelOption(value: 'up', title: l10n.danmakuMoveUp, icon: Icons.arrow_upward_rounded),
+        if (index < _s.sources.length - 1)
+          PanelOption(value: 'down', title: l10n.danmakuMoveDown, icon: Icons.arrow_downward_rounded),
+        PanelOption(value: 'server', title: l10n.danmakuEditServer, icon: Icons.link_rounded),
+        if (!source.builtIn) ...[
+          PanelOption(value: 'appid', title: l10n.danmakuEditAppId, icon: Icons.badge_outlined),
+          PanelOption(value: 'secret', title: l10n.danmakuEditAppSecret, icon: Icons.key_rounded),
+          PanelOption(value: 'remove', title: l10n.danmakuRemove, icon: Icons.delete_outline_rounded),
+        ],
+      ],
+    );
+    if (chosen == null || !mounted) return;
+    final sources = [..._s.sources];
+    switch (chosen) {
+      case 'up':
+        sources.insert(index - 1, sources.removeAt(index));
+        await _save(_s.copyWith(sources: sources));
+      case 'down':
+        sources.insert(index + 1, sources.removeAt(index));
+        await _save(_s.copyWith(sources: sources));
+      case 'remove':
+        sources.removeAt(index);
+        await _save(_s.copyWith(sources: sources));
+      case 'server':
+        await _editSource(index, _SourceField.server);
+      case 'appid':
+        await _editSource(index, _SourceField.appId);
+      case 'secret':
+        await _editSource(index, _SourceField.appSecret);
+    }
+  }
+
+  Future<void> _addSource() async {
+    final sources = [
+      ..._s.sources,
+      DanmakuSource(id: 'custom-${DateTime.now().millisecondsSinceEpoch}', name: '', server: ''),
+    ];
+    await _save(_s.copyWith(sources: sources));
+    if (!mounted) return;
+    await _editSource(sources.length - 1, _SourceField.server);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final s = _s;
+    return Padding(
+      padding: const EdgeInsets.only(left: contentLeft, top: 90, right: 120),
+      child: SizedBox(
+        width: 1100,
+        child: FocusZone(
+          debugLabel: 'settings-danmaku',
+          autofocus: true,
+          child: ListView(padding: const EdgeInsets.only(bottom: 120), children: [
+            Text(l10n.danmakuSettings, style: Zt.headline),
+            const SizedBox(height: 12),
+            Text(l10n.danmakuSettingsIntro, style: Zt.body),
+            const SizedBox(height: 30),
+            SettingToggleRow(
+              title: l10n.danmakuEnabled,
+              subtitle: l10n.danmakuHint,
+              value: s.enabled,
+              onChanged: (v) => _save(s.copyWith(enabled: v)),
+            ),
+            SettingHeader(l10n.danmakuDisplay),
+            SettingChoiceRow<int>(
+              title: l10n.danmakuScrollLines,
+              value: s.scrollLines,
+              options: {for (var i = 1; i <= 10; i++) i: '$i'},
+              onChanged: (v) => _save(s.copyWith(scrollLines: v)),
+            ),
+            SettingChoiceRow<int>(
+              title: l10n.danmakuTopLines,
+              value: s.topLines,
+              options: {for (var i = 0; i <= 4; i++) i: '$i'},
+              onChanged: (v) => _save(s.copyWith(topLines: v)),
+            ),
+            SettingChoiceRow<int>(
+              title: l10n.danmakuBottomLines,
+              value: s.bottomLines,
+              options: {for (var i = 0; i <= 4; i++) i: '$i'},
+              onChanged: (v) => _save(s.copyWith(bottomLines: v)),
+            ),
+            SettingChoiceRow<double>(
+              title: l10n.danmakuScale,
+              value: s.scale,
+              options: const {0.6: '0.6x', 0.8: '0.8x', 1.0: '1.0x', 1.2: '1.2x', 1.4: '1.4x', 1.8: '1.8x'},
+              onChanged: (v) => _save(s.copyWith(scale: v)),
+            ),
+            SettingChoiceRow<int>(
+              title: l10n.danmakuLineGap,
+              value: s.lineGap,
+              options: {for (final i in const [0, 2, 4, 6, 8, 12, 16]) i: '$i px'},
+              onChanged: (v) => _save(s.copyWith(lineGap: v)),
+            ),
+            SettingChoiceRow<int>(
+              title: l10n.danmakuOpacity,
+              value: (s.opacity * 100).round(),
+              options: {for (final v in const [30, 50, 70, 80, 90, 100]) v: '$v%'},
+              onChanged: (v) => _save(s.copyWith(opacity: v / 100)),
+            ),
+            SettingChoiceRow<double>(
+              title: l10n.danmakuSpeed,
+              value: s.speed,
+              options: const {0.5: '0.5x', 0.8: '0.8x', 1.0: '1.0x', 1.2: '1.2x', 1.5: '1.5x', 2.0: '2.0x'},
+              onChanged: (v) => _save(s.copyWith(speed: v)),
+            ),
+            SettingToggleRow(
+              title: l10n.danmakuSyncSpeed,
+              subtitle: l10n.danmakuSyncSpeedHint,
+              value: s.syncSpeed,
+              onChanged: (v) => _save(s.copyWith(syncSpeed: v)),
+            ),
+            SettingToggleRow(
+              title: l10n.danmakuBold,
+              value: s.bold,
+              onChanged: (v) => _save(s.copyWith(bold: v)),
+            ),
+            SettingChoiceRow<int>(
+              title: l10n.danmakuOffset,
+              value: s.offsetMs,
+              options: {
+                for (final v in const [-5000, -3000, -2000, -1000, 0, 1000, 2000, 3000, 5000])
+                  v: v == 0 ? l10n.danmakuOffsetNone : '${v > 0 ? '+' : ''}${v / 1000} s',
+              },
+              onChanged: (v) => _save(s.copyWith(offsetMs: v)),
+            ),
+            SettingHeader(l10n.danmakuSources),
+            Text(l10n.danmakuSourcesHint, style: Zt.body),
+            const SizedBox(height: 12),
+            for (var i = 0; i < s.sources.length; i++)
+              SettingActionRow(
+                title: '${i + 1}. ${_nameOf(l10n, s.sources[i])}',
+                subtitle: s.sources[i].usable ? s.sources[i].host : l10n.danmakuSourceUnusable,
+                icon: s.sources[i].builtIn ? Icons.public_rounded : Icons.dns_rounded,
+                onSelect: () => _sourceActions(i),
+              ),
+            SettingActionRow(
+              title: l10n.danmakuAddSource,
+              icon: Icons.add_rounded,
+              onSelect: _addSource,
+            ),
+            SettingToggleRow(
+              title: l10n.danmakuRememberManual,
+              subtitle: l10n.danmakuRememberManualHint,
+              value: s.rememberManual,
+              onChanged: (v) => _save(s.copyWith(rememberManual: v)),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+enum _SourceField { server, appId, appSecret }

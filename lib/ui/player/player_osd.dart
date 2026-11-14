@@ -192,9 +192,18 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
   /// whole player, so this is the only way danmaku can reach the screen.
   void _pushDanmaku() {
     _pushedPhase = model.phase;
+    final s = _danmaku.settings;
     model.osd?.call('danmaku', {
       'enabled': _danmaku.enabled,
       'visible': _danmaku.visible,
+      'opacity': s.opacity,
+      'scale': s.scale,
+      'speed': s.speed,
+      'bold': s.bold,
+      'lineGap': s.lineGap,
+      'scrollLines': s.scrollLines,
+      'topLines': s.topLines,
+      'bottomLines': s.bottomLines,
       'comments': [
         for (final c in _danmaku.comments)
           {

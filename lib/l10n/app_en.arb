@@ -1575,5 +1575,43 @@
         "type": "int"
       }
     }
-  }
+  },
+  "danmakuSettings": "Danmaku settings",
+  "danmakuSettingsIntro": "Comments are looked up by the title and episode being played. Sources are tried in the order below.",
+  "danmakuNoSource": "No source available",
+  "danmakuSourceCount": "{count} source(s)",
+  "@danmakuSourceCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "danmakuOffHint": "Turned off",
+  "danmakuDisplay": "Display",
+  "danmakuScrollLines": "Scrolling lines",
+  "danmakuTopLines": "Top lines",
+  "danmakuBottomLines": "Bottom lines",
+  "danmakuScale": "Scale",
+  "danmakuLineGap": "Line spacing",
+  "danmakuOpacity": "Opacity",
+  "danmakuSpeed": "Scrolling speed",
+  "danmakuSyncSpeed": "Match playback speed",
+  "danmakuSyncSpeedHint": "Slow comments down or speed them up with the video",
+  "danmakuBold": "Bold",
+  "danmakuOffset": "Timeline offset",
+  "danmakuOffsetNone": "No offset",
+  "danmakuSources": "Sources",
+  "danmakuSourcesHint": "The first source with comments for the episode wins; the rest are only asked when it has none.",
+  "danmakuSourceDandanplay": "dandanplay",
+  "danmakuSourceUnusable": "Address not set",
+  "danmakuAddSource": "Add a server",
+  "danmakuMoveUp": "Move up",
+  "danmakuMoveDown": "Move down",
+  "danmakuEditServer": "Edit address",
+  "danmakuEditAppId": "Edit AppId",
+  "danmakuEditAppSecret": "Edit AppSecret",
+  "danmakuRemove": "Remove",
+  "danmakuRememberManual": "Remember manual picks",
+  "danmakuRememberManualHint": "Reuse the episode you picked by hand next time"
 }

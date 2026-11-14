@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+import 'danmaku_source.dart';
+
 /// One bullet comment, positioned on the playback timeline.
 final class DanmakuComment {
   const DanmakuComment({
@@ -64,6 +66,12 @@ final class DanmakuApi {
     this.appSecret = '',
     http.Client? client,
   }) : _client = client ?? http.Client();
+
+  factory DanmakuApi.of(DanmakuSource source) => DanmakuApi(
+        server: source.baseUrl,
+        appId: source.appId,
+        appSecret: source.appSecret,
+      );
 
   final String server;
   final String appId;

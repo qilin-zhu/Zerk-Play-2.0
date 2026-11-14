@@ -1669,9 +1669,31 @@ mp.observe_property("user-data/zerk/fullscreen", "native", function() render() e
 local dm_low = mp.create_osd_overlay("ass-events")
 local dm_high = mp.create_osd_overlay("ass-events")
 local dm_timer = nil
-local DM = { list = {} }
+local DM = {
+  list = {},
+  -- Display options, overwritten by the payload from Dart.
+  font = 44, line = 52, dur = 11,
+  top_h = 52, scroll_h = 260, bottom_h = 156,
+  opacity = 1.0, bold = false,
+}
 local DM_W, DM_H = 1920, 1080
-local DM_FONT, DM_LINE, DM_DUR, DM_AREA = 44, 52, 11, 0.7
+local DM_BASE_FONT, DM_BASE_DUR = 44, 11
+
+local function dm_apply_options(o)
+  o = o or {}
+  local scale = math.max(0.4, tonumber(o.scale) or 1.0)
+  local gap = math.max(0, tonumber(o.lineGap) or 4)
+  local speed = math.max(0.2, tonumber(o.speed) or 1.0)
+  local font = math.floor(DM_BASE_FONT * scale + 0.5)
+  local line = font + gap
+  DM.font, DM.line = font, line
+  DM.top_h = math.max(0, math.floor(tonumber(o.topLines) or 1)) * line
+  DM.scroll_h = math.max(1, math.floor(tonumber(o.scrollLines) or 5)) * line
+  DM.bottom_h = math.max(0, math.floor(tonumber(o.bottomLines) or 3)) * line
+  DM.dur = DM_BASE_DUR / speed
+  DM.opacity = math.max(0.1, math.min(1.0, tonumber(o.opacity) or 1.0))
+  DM.bold = o.bold == true
+end
 
 local function dm_active()
   return S.danmaku.enabled and S.danmaku.visible and #DM.list > 0
@@ -1688,7 +1710,7 @@ local function dm_width(s)
     local b = s:byte(i)
     if b < 0x80 then ascii = ascii + 1 elseif b >= 0xC0 then wide = wide + 1 end
   end
-  return (ascii * 0.55 + wide) * DM_FONT
+  return (ascii * 0.55 + wide) * DM.font
 end
 
 local function dm_color(rgb)
@@ -1703,13 +1725,13 @@ local function dm_overlap(y1, h1, y2, h2)
 end
 
 -- Top-down slot search; skips past every colliding comment in one step.
-local function dm_slot_down(active, height, collides, limit)
-  local y = 0
+local function dm_slot_down(active, height, collides, y0, limit)
+  local y = y0
   while y + height <= limit do
     local next_y = nil
     for _, d in ipairs(active) do
-      if dm_overlap(y, height, d.y, DM_LINE) and collides(d) then
-        local below = d.y + DM_LINE
+      if dm_overlap(y, height, d.y, DM.line) and collides(d) then
+        local below = d.y + DM.line
         next_y = next_y and math.max(next_y, below) or below
       end
     end
@@ -1719,12 +1741,12 @@ local function dm_slot_down(active, height, collides, limit)
   return nil
 end
 
-local function dm_slot_up(active, height, limit)
+local function dm_slot_up(active, height, y0, limit)
   local y = limit - height
-  while y >= 0 do
+  while y >= y0 do
     local next_y = nil
     for _, d in ipairs(active) do
-      if dm_overlap(y, height, d.y, DM_LINE) then
+      if dm_overlap(y, height, d.y, DM.line) then
         local above = d.y - height
         next_y = next_y and math.min(next_y, above) or above
       end
@@ -1738,7 +1760,10 @@ end
 -- Comments arrive sorted by time. Each one is placed once, against the ones
 -- still on screen at that moment, so the layout never shifts afterwards.
 local function dm_layout()
-  local limit = DM_H * DM_AREA
+  local top_limit = DM.top_h
+  local scroll_limit = DM.top_h + DM.scroll_h
+  local bottom_floor = math.max(scroll_limit, math.floor(DM_H * 0.92) - DM.bottom_h)
+  local bottom_limit = math.floor(DM_H * 0.92)
   local active = {}
   for _, c in ipairs(DM.list) do
     for i = #active, 1, -1 do
@@ -1746,18 +1771,18 @@ local function dm_layout()
     end
     local y
     if c.kind == 4 then
-      y = dm_slot_up(active, DM_LINE, limit)
+      if DM.bottom_h > 0 then y = dm_slot_up(active, DM.line, bottom_floor, bottom_limit) end
     elseif c.kind == 5 then
-      y = dm_slot_down(active, DM_LINE, function() return true end, limit)
+      if DM.top_h > 0 then y = dm_slot_down(active, DM.line, function() return true end, 0, top_limit) end
     else
-      local velocity = (c.len + DM_W) / DM_DUR
-      y = dm_slot_down(active, DM_LINE, function(previous)
+      local velocity = (c.len + DM_W) / DM.dur
+      y = dm_slot_down(active, DM.line, function(previous)
         local delta_x = (c.t - previous.t) * previous.v - previous.len
         if delta_x < 0 then return true end
         local delta_v = velocity - previous.v
         if delta_v <= 0 then return false end
         return (delta_x / delta_v) < (previous.end_time - c.t)
-      end, limit)
+      end, top_limit, scroll_limit)
       c.v = velocity
     end
     if y then
@@ -1765,7 +1790,7 @@ local function dm_layout()
       if c.kind == 4 or c.kind == 5 then
         c.end_time = c.t + 5
       else
-        c.end_time = c.t + DM_DUR
+        c.end_time = c.t + DM.dur
       end
       active[#active + 1] = c
     else
@@ -1778,19 +1803,21 @@ local function dm_draw()
   local pos = prop("time-pos", 0)
   if not pos then return end
   local low, high = {}, {}
+  local alpha = string.format("%02X", math.floor((1 - DM.opacity) * 255 + 0.5))
+  local style = string.format("\\fn%s\\fs%d\\b%d\\bord2\\shad0\\alpha&H%s&", T.font, DM.font, DM.bold and 1 or 0, alpha)
   for _, c in ipairs(DM.list) do
     if c.y and not c.dropped and c.t <= pos and c.end_time >= pos then
       local color = dm_color(c.color)
       if c.kind == 4 or c.kind == 5 then
         high[#high + 1] = string.format(
-          "{\\an8\\pos(%d,%.1f)\\fn%s\\fs%d\\bord2\\shad0\\c&H%s&}%s",
-          math.floor(DM_W / 2), c.y, T.font, DM_FONT, color, esc(c.text))
+          "{\\an8\\pos(%d,%.1f)%s\\c&H%s&}%s",
+          math.floor(DM_W / 2), c.y, style, color, esc(c.text))
       else
-        local progress = (pos - c.t) / DM_DUR
+        local progress = (pos - c.t) / DM.dur
         local x = DM_W - progress * (DM_W + c.len)
         low[#low + 1] = string.format(
-          "{\\an7\\pos(%.1f,%.1f)\\fn%s\\fs%d\\bord2\\shad0\\c&H%s&}%s",
-          x, c.y, T.font, DM_FONT, color, esc(c.text))
+          "{\\an7\\pos(%.1f,%.1f)%s\\c&H%s&}%s",
+          x, c.y, style, color, esc(c.text))
       end
     end
   end
@@ -1827,6 +1854,7 @@ mp.register_script_message("danmaku", function(raw)
   local d = json(raw) or {}
   S.danmaku.enabled = d.enabled == true
   S.danmaku.visible = d.visible ~= false
+  dm_apply_options(d)
   DM.list = {}
   for _, c in ipairs(type(d.comments) == "table" and d.comments or {}) do
     local t = tonumber(c.t)
