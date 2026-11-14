@@ -54,6 +54,10 @@ final class DanmakuSettings {
 
   bool get usable => enabled && usableSources.isNotEmpty;
 
+  /// Font size for the Flutter overlay (Android), derived from [scale]. The mpv
+  /// OSD scales itself, so only this backend needs a concrete number.
+  double get fontSize => (22 * scale).clamp(12.0, 48.0);
+
   DanmakuSettings copyWith({
     bool? enabled,
     List<DanmakuSource>? sources,
