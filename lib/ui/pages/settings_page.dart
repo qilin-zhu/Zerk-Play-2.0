@@ -1120,7 +1120,7 @@ class _DanmakuSettingsPageState extends State<_DanmakuSettingsPage> {
             SettingChoiceRow<double>(
               title: l10n.danmakuScale,
               value: s.scale,
-              options: const {0.6: '0.6x', 0.8: '0.8x', 1.0: '1.0x', 1.2: '1.2x', 1.4: '1.4x', 1.8: '1.8x'},
+              options: {0.6: '0.6x', 0.8: '0.8x', 1.0: '1.0x', 1.2: '1.2x', 1.4: '1.4x', 1.8: '1.8x'},
               onChanged: (v) => _save(s.copyWith(scale: v)),
             ),
             SettingChoiceRow<int>(
@@ -1138,7 +1138,7 @@ class _DanmakuSettingsPageState extends State<_DanmakuSettingsPage> {
             SettingChoiceRow<double>(
               title: l10n.danmakuSpeed,
               value: s.speed,
-              options: const {0.5: '0.5x', 0.8: '0.8x', 1.0: '1.0x', 1.2: '1.2x', 1.5: '1.5x', 2.0: '2.0x'},
+              options: {0.5: '0.5x', 0.8: '0.8x', 1.0: '1.0x', 1.2: '1.2x', 1.5: '1.5x', 2.0: '2.0x'},
               onChanged: (v) => _save(s.copyWith(speed: v)),
             ),
             SettingToggleRow(
