@@ -15,6 +15,7 @@ import 'playback/mpv/mpv_backend.dart';
 import 'playback/player_settings.dart';
 import 'playback/player_smoke.dart';
 import 'core/windows/native_window.dart';
+import 'core/emby/server_kind.dart';
 import 'l10n/l10n.dart';
 import 'ui/core/gamepad.dart';
 import 'ui/core/input_mode.dart';
@@ -24,6 +25,7 @@ import 'ui/core/tv_scale.dart';
 import 'ui/core/ui_sounds.dart';
 import 'ui/focus/focus_zone.dart';
 import 'ui/pages/onboarding_page.dart';
+import 'ui/pages/fnos_home_page.dart';
 import 'ui/pages/sign_in_page.dart';
 import 'ui/shell/shell.dart';
 import 'ui/theme/tokens.dart';
@@ -170,7 +172,9 @@ class _ZerkAppState extends State<ZerkApp> {
           ? const SignInPage()
           : !services.settings.onboarded
               ? const OnboardingPage(key: ValueKey('onboarding'))
-              : Shell(key: const ValueKey('shell'), initialTab: widget.initialTab),
+              : services.janus.session.kind == ServerKind.fnos
+                  ? const FnOsHomePage(key: ValueKey('fnos'))
+                  : Shell(key: const ValueKey('shell'), initialTab: widget.initialTab),
     );
   }
 }

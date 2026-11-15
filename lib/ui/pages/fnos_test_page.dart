@@ -11,10 +11,9 @@ import '../widgets/common.dart';
 
 /// Connection test for 飞牛影视 (trimemedia on fnOS).
 ///
-/// This is a diagnostic before the real integration: it runs login → library
-/// list → items → play info → stream against a live server and prints what came
-/// back, so the response shapes are verified before anything is mapped onto the
-/// player.
+/// Diagnostic: it runs login → items → item detail → season/episode lists →
+/// play info → stream against a live server and prints what came back, so the
+/// response shapes stay verifiable while the fnOS pages are built out.
 class FnosTestPage extends StatefulWidget {
   const FnosTestPage();
 
@@ -53,42 +52,73 @@ class FnosTestPageState extends State<FnosTestPage> {
       _say('1. ${l10n.fnosStepLogin}');
       final stopwatch = Stopwatch()..start();
       await client.login(_user, _pass);
-      _say('   ok (${stopwatch.elapsedMilliseconds} ms)');
+      _say('   ok (${stopwatch.elapsedMilliseconds} ms), cookie: ${client.cookie == null ? 'none' : 'yes'}');
 
-      _say('2. mediadb/list');
-      final dbs = await client.mediaDbList();
-      _say('   ${_clip(dbs, 500)}');
-      String? dbGuid;
-      if (dbs is List && dbs.isNotEmpty) {
-        final first = dbs.first;
-        if (first is Map) dbGuid = first['guid']?.toString();
-        _say('   ${l10n.fnosLibrariesFound(dbs.length.toString())}');
+      _say('2. item/list');
+      final items = await client.itemList(pageSize: 10, page: 1);
+      final list = items is Map ? items['list'] as List? ?? const [] : items is List ? items : const [];
+      _say('   ${l10n.fnosItemsFound(list.length.toString())}');
+      if (list.isEmpty) {
+        _say(l10n.fnosNoItem);
+        return;
       }
-
-      _say('3. item/list');
-      final items = await client.itemList(ancestorGuid: dbGuid, pageSize: 10);
-      String? itemGuid;
-      if (items is List) {
-        _say('   ${l10n.fnosItemsFound(items.length.toString())}');
-        final first = items.isNotEmpty ? items.first : null;
-        _say('   ${_clip(first, 500)}');
-        if (first is Map) itemGuid = first['guid']?.toString();
-      } else {
-        _say('   ${_clip(items, 300)}');
-      }
-
-      if (itemGuid == null) {
+      final first = list.first as Map;
+      _say('   ${_clip(first, 500)}');
+      final itemGuid = first['guid']?.toString();
+      if (itemGuid == null || itemGuid.isEmpty) {
         _say(l10n.fnosNoItem);
         return;
       }
 
-      _say('4. play/info');
+      _say('3. item/{guid}');
+      final detail = await client.itemDetail(itemGuid);
+      _say('   ${_clip(detail, 400)}');
+      final type = detail is Map ? detail['type']?.toString() ?? '' : '';
+
+      if (type == 'tv') {
+        _say('4. season/list/{guid}');
+        final seasons = await client.seasonList(itemGuid);
+        final seasonList = seasons is List ? seasons : const [];
+        _say('   ${_clip(seasons is List && seasons.isNotEmpty ? seasons.first : seasons, 300)}');
+        if (seasonList.isNotEmpty) {
+          final seasonGuid = (seasonList.first as Map)['guid']?.toString();
+          if (seasonGuid != null && seasonGuid.isNotEmpty) {
+            _say('5. episode/list/{seasonGuid}');
+            final episodes = await client.episodeList(seasonGuid);
+            final epList = episodes is List ? episodes : episodes is Map ? episodes['list'] as List? ?? const [] : const [];
+            _say('   ${l10n.fnosItemsFound(epList.length.toString())}');
+            _say('   ${_clip(epList.isNotEmpty ? epList.first : episodes, 300)}');
+          }
+        }
+      }
+
+      _say('6. play/info');
       final info = await client.playInfo(itemGuid);
       _say('   ${_clip(info, 700)}');
 
       String? mediaGuid;
       if (info is Map) {
-        mediaGuid = info['media_guid']?.toString() ?? info['mediaGuid']?.toString();
+        for (final key in ['media_guid', 'mediaGuid', 'video_guid', 'videoGuid']) {
+          final v = info[key]?.toString();
+          if (v != null && v.isNotEmpty) {
+            mediaGuid = v;
+            break;
+          }
+        }
+        if (mediaGuid == null) {
+          for (final value in info.values) {
+            if (value is Map) {
+              for (final key in ['media_guid', 'guid', 'video_guid']) {
+                final v = value[key]?.toString();
+                if (v != null && v.isNotEmpty) {
+                  mediaGuid = v;
+                  break;
+                }
+              }
+            }
+            if (mediaGuid != null) break;
+          }
+        }
       }
 
       if (mediaGuid == null || mediaGuid.isEmpty) {
@@ -96,7 +126,7 @@ class FnosTestPageState extends State<FnosTestPage> {
         return;
       }
 
-      _say('5. stream');
+      _say('7. stream');
       final stream = await client.stream(mediaGuid);
       _say('   ${_clip(stream, 700)}');
       _say(l10n.fnosDone);

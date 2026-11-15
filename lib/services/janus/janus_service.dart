@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/emby/emby_client.dart';
 import '../../core/emby/emby_session.dart';
 import '../../core/emby/server_kind.dart';
+import '../../core/fnos/fnos_client.dart';
 import '../../core/storage/local_store.dart';
 
 final class JanusService {
@@ -18,6 +19,7 @@ final class JanusService {
   static const _kAccessToken = 'emby.accessToken';
   static const _kUserId = 'emby.userId';
   static const _kDeviceId = 'emby.deviceId';
+  static const _kFnosCookie = 'fnos.cookie';
 
   final LocalStore _store;
   final String _clientName;
@@ -26,6 +28,11 @@ final class JanusService {
 
   EmbySession? _session;
   EmbyClient? _client;
+  FnosClient? _fnos;
+
+  /// Live trimemedia client when the session is a 飞牛影视 (fnOS) one; null for
+  /// Emby/Jellyfin sessions.
+  FnosClient? get fnos => _fnos;
 
   bool get isAuthenticated => _session != null;
   EmbySession get session {
@@ -94,6 +101,12 @@ final class JanusService {
       accessToken: accessToken,
     );
     _client = client;
+
+    if (kind == ServerKind.fnos) {
+      final fnos = FnosClient(baseUrl: '$serverUrl', token: accessToken);
+      fnos.cookie = await _store.getString(_kFnosCookie);
+      _fnos = fnos;
+    }
     return true;
   }
 
@@ -109,6 +122,10 @@ final class JanusService {
           '',
     );
     final deviceId = await _ensureDeviceId();
+
+    if (kind == ServerKind.fnos) {
+      return _loginFnos(url: url, deviceId: deviceId, username: username, password: password);
+    }
 
     final client = EmbyClient(
       serverUrl: url,
@@ -154,15 +171,56 @@ final class JanusService {
 
     client.setAccessToken(token);
     _client = client;
+    _fnos = null;
+    return _session!;
+  }
+
+  Future<EmbySession> _loginFnos({
+    required Uri url,
+    required String deviceId,
+    required String username,
+    required String password,
+  }) async {
+    final fnos = FnosClient(baseUrl: '$url');
+    final token = await fnos.login(username, password);
+
+    await _store.setString(_kServerUrl, url.toString());
+    await _store.setString(_kServerKind, ServerKind.fnos.name);
+    await _store.setString(_kAccessToken, token);
+    await _store.setString(_kUserId, username);
+    await _store.setString(_kFnosCookie, fnos.cookie ?? '');
+
+    _session = EmbySession(
+      serverUrl: url,
+      kind: ServerKind.fnos,
+      clientName: _clientName,
+      deviceName: _deviceName,
+      deviceId: deviceId,
+      appVersion: _appVersion,
+      userId: username,
+      accessToken: token,
+    );
+    _fnos = fnos;
+    _client = EmbyClient(
+      serverUrl: url,
+      kind: ServerKind.fnos,
+      clientName: _clientName,
+      deviceName: _deviceName,
+      deviceId: deviceId,
+      appVersion: _appVersion,
+      accessToken: token,
+    );
     return _session!;
   }
 
   Future<void> logout() async {
     _session = null;
     _client?.setAccessToken(null);
+    _fnos = null;
 
     await _store.remove(_kAccessToken);
     await _store.remove(_kUserId);
+    await _store.remove(_kFnosCookie);
   }
 
   Future<String> _ensureDeviceId() async {

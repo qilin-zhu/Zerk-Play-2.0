@@ -766,5 +766,17 @@
   "fnosNoMedia": "播放信息里没有 media guid",
   "fnosDone": "完成",
   "fnosFailed": "失败",
-  "fnosHostRequired": "请先填写服务器地址"
+  "fnosHostRequired": "请先填写服务器地址",
+  "fnosHomeTitle": "飞牛影视",
+  "fnosEmpty": "媒体库还是空的。",
+  "fnosLoadFailed": "无法加载飞牛媒体库：{error}",
+  "@fnosLoadFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "fnosEpisodesEmpty": "这一季还没有剧集。",
+  "fnosRefreshing": "加载中…"
 }

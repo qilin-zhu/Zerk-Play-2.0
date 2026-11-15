@@ -1,6 +1,7 @@
 enum ServerKind {
   emby('Emby'),
-  jellyfin('Jellyfin');
+  jellyfin('Jellyfin'),
+  fnos('飞牛影视');
 
   const ServerKind(this.label);
 

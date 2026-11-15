@@ -1642,5 +1642,17 @@
   "fnosNoMedia": "The play info did not contain a media guid",
   "fnosDone": "Done",
   "fnosFailed": "Failed",
-  "fnosHostRequired": "Enter the server address first"
+  "fnosHostRequired": "Enter the server address first",
+  "fnosHomeTitle": "FnOS Media",
+  "fnosEmpty": "The library is still empty.",
+  "fnosLoadFailed": "Could not load the fnOS library: {error}",
+  "@fnosLoadFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "fnosEpisodesEmpty": "No episodes in this season yet.",
+  "fnosRefreshing": "Loading…"
 }

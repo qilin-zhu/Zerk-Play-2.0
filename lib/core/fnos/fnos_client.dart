@@ -12,6 +12,11 @@ import 'package:http/http.dart' as http;
 /// md5 of the exact body that goes out. Both strings were verified against a
 /// live server: a correct sign answers `{"code":0,...}`, a missing one answers
 /// `{"code":5000,"msg":"invalid sign"}`.
+///
+/// Endpoint shapes follow FlyNarwhal (verified against real servers): list-like
+/// reads (mediadb/list, item/{guid}, season/list/{guid}, episode/list/{guid},
+/// search/list?q=, play/list) are GETs with the guid in the path, while
+/// item/list, play/info, stream and play/record are POSTs with a JSON body.
 final class FnosClient {
   FnosClient({required String baseUrl, String? token, http.Client? client})
       : base = _trimBase(baseUrl),
@@ -41,6 +46,19 @@ final class FnosClient {
   String? get token => _token;
 
   void updateToken(String? token) => _token = token;
+
+  String? get cookie => _cookie;
+
+  set cookie(String? value) => _cookie = (value == null || value.isEmpty) ? null : value;
+
+  /// Headers the trimemedia image endpoint (`sys/img`) needs. FlyNarwhal sends
+  /// the session cookie plus the raw token in `Authorization`; images fail on a
+  /// real server without them.
+  Map<String, String> get imageHeaders => {
+        'User-Agent': _userAgent,
+        if (_token != null && _token!.isNotEmpty) 'Authorization': _token!,
+        if (_cookie != null && _cookie!.isNotEmpty) 'Cookie': _cookie!,
+      };
 
   /// `path` is the API path exactly as it appears after the host, because the
   /// server signs the path as received.
@@ -130,10 +148,25 @@ final class FnosClient {
     }
   }
 
-  /// Poster/backdrop URL; `path` comes from item responses (`poster`/`thumb`).
-  String imageUrl(String path) => '$base/v/api/v1/sys/img?path=${Uri.encodeComponent(path)}';
+  /// Poster/backdrop URL. trimemedia returns server-relative media paths
+  /// (e.g. `/media/poster/...`) that are served through `sys/img`, mirroring
+  /// FlyNarwhal's `resolveMediaImageUrl`. Absolute URLs pass through untouched.
+  String imageUrl(String path, {int? width}) {
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) return base;
+    final lower = trimmed.toLowerCase();
+    if (lower.startsWith('http://') || lower.startsWith('https://')) return trimmed;
+    final suffix = trimmed.contains('?') ? '' : (width != null ? '?w=${width.round()}' : '');
+    if (trimmed.startsWith('/v/api/v1/sys/img')) return '$base$trimmed$suffix';
+    if (trimmed.startsWith('v/api/v1/sys/img')) return '$base/$trimmed$suffix';
+    final normalized = trimmed.startsWith('/') ? trimmed : '/$trimmed';
+    return '$base/v/api/v1/sys/img$normalized$suffix';
+  }
 
-  Future<Object?> mediaDbList() => post('/v/api/v1/mediadb/list');
+  Future<Object?> mediaDbList() => get('/v/api/v1/mediadb/list');
+
+  /// Recently watched entries (GET /v/api/v1/play/list).
+  Future<Object?> playList() => get('/v/api/v1/play/list');
 
   Future<Object?> itemList({
     String? ancestorGuid,
@@ -153,12 +186,18 @@ final class FnosClient {
         'tags': {'type': types},
       });
 
-  Future<Object?> itemDetail(String guid) =>
-      post('/v/api/v1/item/detail', body: {'guid': guid});
+  /// GET /v/api/v1/item/{guid}
+  Future<Object?> itemDetail(String guid) => get('/v/api/v1/item/$guid');
 
-  Future<Object?> seasonList(String guid) => post('/v/api/v1/season/list', body: {'guid': guid});
+  /// GET /v/api/v1/season/list/{guid}
+  Future<Object?> seasonList(String guid) => get('/v/api/v1/season/list/$guid');
 
-  Future<Object?> episodeList(String guid) => post('/v/api/v1/episode/list', body: {'guid': guid});
+  /// GET /v/api/v1/episode/list/{guid}
+  Future<Object?> episodeList(String guid) => get('/v/api/v1/episode/list/$guid');
+
+  /// GET /v/api/v1/search/list?q={keyword}
+  Future<Object?> search(String keyword, {int pageSize = 30, int page = 1}) =>
+      get('/v/api/v1/search/list', query: {'q': keyword, 'page_size': '$pageSize', 'page': '$page'});
 
   /// Playback descriptors for an item: guids for video/audio/subtitle plus the
   /// media that `/v/api/v1/stream` turns into a playable URL.
@@ -173,13 +212,9 @@ final class FnosClient {
 
   Future<Object?> playRecord(Map<String, Object?> body) => post('/v/api/v1/play/record', body: body);
 
-  Future<Object?> search(String keyword, {int pageSize = 30, int page = 1}) => post('/v/api/v1/search/list',
-      body: {
-        'keyword': keyword,
-        'page_size': pageSize,
-        'page': page,
-        'tags': {'type': []},
-      });
+  /// Direct original-file range proxy for a media guid (FlyNarwhal's
+  /// `buildDirectStreamUrl`); needs [imageHeaders]-style auth on the player.
+  String directStreamUrl(String mediaGuid) => '$base/v/api/v1/media/range/$mediaGuid';
 
   static String _mergeCookies(String? existing, String setCookie) {
     final map = <String, String>{};

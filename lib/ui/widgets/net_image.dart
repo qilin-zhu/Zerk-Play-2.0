@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/log/logging_http_client.dart';
 import '../core/tv_scale.dart';
@@ -9,10 +10,11 @@ import 'image_disk_cache.dart';
 
 @immutable
 class NetImageProvider extends ImageProvider<NetImageProvider> {
-  const NetImageProvider(this.url, {this.decodeWidth});
+  const NetImageProvider(this.url, {this.decodeWidth, this.headers});
 
   final Uri url;
   final int? decodeWidth;
+  final Map<String, String>? headers;
 
   static final _client = LoggingHttpClient(tag: 'image', quiet: true);
 
@@ -41,7 +43,10 @@ class NetImageProvider extends ImageProvider<NetImageProvider> {
   Future<Uint8List> _bytes() async {
     final cached = await readCachedImage(url);
     if (cached != null) return cached;
-    final res = await _client.get(url).timeout(const Duration(seconds: 20));
+    final request = http.Request('GET', url);
+    final extra = headers;
+    if (extra != null && extra.isNotEmpty) request.headers.addAll(extra);
+    final res = await _client.send(request).then(http.Response.fromStream).timeout(const Duration(seconds: 20));
     if (res.statusCode != 200 || res.bodyBytes.isEmpty) {
       throw NetworkImageLoadException(statusCode: res.statusCode, uri: url);
     }
@@ -51,10 +56,13 @@ class NetImageProvider extends ImageProvider<NetImageProvider> {
 
   @override
   bool operator ==(Object other) =>
-      other is NetImageProvider && other.url == url && other.decodeWidth == decodeWidth;
+      other is NetImageProvider &&
+      other.url == url &&
+      other.decodeWidth == decodeWidth &&
+      other.headers == headers;
 
   @override
-  int get hashCode => Object.hash(url, decodeWidth);
+  int get hashCode => Object.hash(url, decodeWidth, headers);
 }
 
 class NetImage extends StatelessWidget {
@@ -67,6 +75,7 @@ class NetImage extends StatelessWidget {
     this.alignment = Alignment.center,
     this.fallback,
     this.fadeDuration = const Duration(milliseconds: 260),
+    this.headers,
   });
 
   final Uri? url;
@@ -77,6 +86,7 @@ class NetImage extends StatelessWidget {
   final Alignment alignment;
   final Widget? fallback;
   final Duration fadeDuration;
+  final Map<String, String>? headers;
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +95,7 @@ class NetImage extends StatelessWidget {
     final ratio = TvScale.decodeRatio(context);
     final decode = width == null ? null : (width! * ratio).round();
     return Image(
-      image: NetImageProvider(u, decodeWidth: decode),
+      image: NetImageProvider(u, decodeWidth: decode, headers: headers),
       width: width,
       height: height,
       fit: fit,

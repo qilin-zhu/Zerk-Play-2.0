@@ -158,7 +158,7 @@ final class AppServices extends ChangeNotifier {
       settings: settings,
     );
     services._detectHub();
-    if (janus.isAuthenticated) {
+    if (janus.isAuthenticated && janus.session.kind != ServerKind.fnos) {
       unawaited(services.playback.registerCapabilities().catchError((Object e) {
         debugPrint('[emby] capabilities: $e');
       }));
@@ -190,7 +190,7 @@ final class AppServices extends ChangeNotifier {
   bool get embyTvAvailable => !liveTvAvailable && _embyTvAvailable;
 
   Future<void> _detectEmbyTv() async {
-    if (!janus.isAuthenticated) return;
+    if (!janus.isAuthenticated || janus.session.kind == ServerKind.fnos) return;
     final available = await embyLiveTv.available();
     if (available == _embyTvAvailable) return;
     _embyTvAvailable = available;
@@ -243,12 +243,14 @@ final class AppServices extends ChangeNotifier {
       {required String server, ServerKind kind = ServerKind.emby, required String username, required String password}) async {
     await janus.login(serverUrl: server, kind: kind, username: username, password: password);
     HubLink.droppedMessage = null;
-    catalog.collections?.invalidate();
-    try {
-      await playback.registerCapabilities();
-    } catch (_) {}
+    if (kind != ServerKind.fnos) {
+      catalog.collections?.invalidate();
+      try {
+        await playback.registerCapabilities();
+      } catch (_) {}
+    }
     notifyListeners();
-    unawaited(_detectEmbyTv());
+    if (kind != ServerKind.fnos) unawaited(_detectEmbyTv());
     _detectHub();
   }
 
