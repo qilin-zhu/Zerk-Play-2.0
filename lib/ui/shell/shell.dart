@@ -309,7 +309,9 @@ class _ShellState extends State<Shell> {
               child: ValueListenableBuilder(
                 valueListenable: HomePage.firstLoad,
                 builder: (context, loading, rail) {
-                  final hidden = loading && _tab == ShellTab.home;
+                  // HomePage.firstLoad only settles for the Emby home; the fnOS
+                  // home never touches it, so the rail must not key off it there.
+                  final hidden = loading && _tab == ShellTab.home && !_isFnos;
                   return IgnorePointer(
                     ignoring: hidden,
                     child: ExcludeFocus(
