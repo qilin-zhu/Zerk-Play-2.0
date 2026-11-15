@@ -111,7 +111,7 @@ class FnosTestPageState extends State<FnosTestPage> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     return Padding(
-      padding: const EdgeInsets.only(left: contentLeft, top: 90, right: 120),
+      padding: const EdgeInsets.only(left: 120, top: 90, right: 120),
       child: SizedBox(
         width: 1100,
         child: FocusZone(
