@@ -123,7 +123,7 @@ local S = {
   scope = 0, anamorphic = 1, autocrop = false, crop = nil, margin = 0, crop_hits = 0,
   hits = {},
   pointer = false, hover = nil, mouse_x = 0,
-  danmaku = { enabled = false, visible = true, count = 0, info = nil, results = nil, stage = "anime" },
+  danmaku = { enabled = false, visible = true, count = 0, info = nil, episode = nil, results = nil, stage = "anime" },
 }
 
 local W, H = 1920, 1080
@@ -517,9 +517,20 @@ open_panel = function(kind)
     p.items = {
       { id = "close", label = tr("close") },
     }
+    -- What is actually loaded, ticked while it is on screen. Long episode
+    -- titles wrap to three lines instead of being cut off.
+    if S.danmaku.episode and S.danmaku.episode ~= "" then
+      p.items[#p.items + 1] = {
+        id = "loaded",
+        label = S.danmaku.episode,
+        detail = tr("danmaku_count", S.danmaku.count),
+        selected = S.danmaku.visible and S.danmaku.count > 0,
+        wrap = true,
+      }
+    end
     if S.danmaku.count > 0 then
-      -- No `selected`: the label already says hide/show, and a tick on the
-      -- right of an action item reads like a setting rather than a command.
+      -- No `selected` here: the label already says hide/show, and a tick on an
+      -- action item reads like a setting rather than a command.
       p.items[#p.items + 1] = {
         id = "toggle",
         label = S.danmaku.visible and tr("danmaku_hide") or tr("danmaku_show"),
@@ -531,7 +542,7 @@ open_panel = function(kind)
     local r = S.danmaku.results
     p.items = {}
     for _, it in ipairs(r and r.items or {}) do
-      p.items[#p.items + 1] = { id = it.id, label = it.label, detail = it.detail }
+      p.items[#p.items + 1] = { id = it.id, label = it.label, detail = it.detail, wrap = true }
     end
     if #p.items == 0 then p.items = { { label = tr("danmaku_no_results"), inert = true } } end
   elseif kind == "settings" then p.title, p.items = tr("settings"), settings_items()
@@ -595,7 +606,7 @@ local function panel_activate(item)
     if sub_panels[item.id] then open_panel(sub_panels[item.id])
     else send("sub", tostring(item.id)); S.panel = nil end
   elseif p.kind == "danmaku" then
-    if item.id == "toggle" then
+    if item.id == "toggle" or item.id == "loaded" then
       dm_set_visible(not S.danmaku.visible)
       S.panel = nil
     elseif item.id == "search" then
@@ -858,6 +869,41 @@ local function draw_slider_panel(out, p)
   end, "slider")
 end
 
+-- Panel rows are single-line by default; danmaku titles are long enough to need
+-- wrapping, and ASS has no ellipsis of its own.
+local function char_bytes(b)
+  if b == nil then return 1 end
+  if b < 0x80 then return 1 end
+  if b < 0xE0 then return 2 end
+  if b < 0xF0 then return 3 end
+  return 4
+end
+
+local function wrap_text(s, size, max_lines, max_w)
+  local lines, cur, cur_w = {}, {}, 0
+  local i, truncated = 1, false
+  while i <= #s do
+    local n = char_bytes(s:byte(i))
+    local ch = s:sub(i, i + n - 1)
+    local w = (n == 1 and 0.55 or 1.0) * size
+    if cur_w + w > max_w then
+      lines[#lines + 1] = table.concat(cur)
+      cur, cur_w = {}, 0
+      if #lines >= max_lines then
+        truncated = true
+        break
+      end
+    end
+    cur[#cur + 1] = ch
+    cur_w = cur_w + w
+    i = i + n
+  end
+  if not truncated and #cur > 0 then lines[#lines + 1] = table.concat(cur) end
+  if truncated and #lines > 0 then lines[#lines] = lines[#lines] .. "…" end
+  if #lines == 0 then lines[1] = "" end
+  return lines
+end
+
 local function draw_panel(out)
   local p = S.panel
   if p.slider then
@@ -882,32 +928,72 @@ local function draw_panel(out)
     out[#out + 1] = text(px + 56, 136, 4, 22, T.muted, esc(name))
   end
 
-  local row_h, top = 84, (p.subhead and p.subhead ~= "") and 176 or 160
-  local max_rows = math.floor((H - top - 40) / row_h)
+  local top = (p.subhead and p.subhead ~= "") and 176 or 160
+  local avail = H - top - 40
+
+  -- Rows are single-line unless an item asks to wrap; those get a height that
+  -- follows the number of lines they actually took.
+  local heights, lines_for = {}, {}
+  for i, it in ipairs(p.items) do
+    if it.wrap then
+      lines_for[i] = wrap_text(it.label, 30, 3, 440)
+      heights[i] = 20 + #lines_for[i] * 38 + (it.detail and 34 or 0) + 12
+    else
+      heights[i] = 84
+    end
+  end
+
+  local function span(from, to)
+    local total = 0
+    for i = from, to do total = total + (heights[i] or 0) end
+    return total
+  end
+
+  p.scroll = clamp(p.scroll or 1, 1, math.max(1, #p.items))
+  if p.cursor <= 0 then p.cursor = 1 end
   if not p.free_scroll then
     if p.cursor < p.scroll then p.scroll = p.cursor end
-    if p.cursor >= p.scroll + max_rows then p.scroll = p.cursor - max_rows + 1 end
+    while p.scroll < p.cursor and span(p.scroll, p.cursor) > avail do p.scroll = p.scroll + 1 end
+    while p.scroll > 1 and span(p.scroll - 1, p.cursor) <= avail do p.scroll = p.scroll - 1 end
   end
-  p.scroll = clamp(p.scroll, 1, math.max(1, #p.items - max_rows + 1))
 
-  for i = p.scroll, math.min(#p.items, p.scroll + max_rows - 1) do
+  local y, last = top, p.scroll - 1
+  for i = p.scroll, #p.items do
     local it = p.items[i]
-    local y = top + (i - p.scroll) * row_h
+    local h = heights[i]
+    if y + h - 10 > H - 40 then break end
     local focused = lit("row:" .. i, i == p.cursor)
-    if focused then out[#out + 1] = rrect(px + 28, y, pw - 56, row_h - 10, 16, T.white) end
+    if focused then out[#out + 1] = rrect(px + 28, y, pw - 56, h - 10, 16, T.white) end
     local fg = focused and "141414" or T.white
     local sub = focused and "505050" or T.muted
-    local label_y = it.detail and (y + 26) or (y + (row_h - 10) / 2)
-    out[#out + 1] = text(px + 64, label_y, 4, 30, fg, esc(it.label), { font = T.font_semibold })
-    if it.detail then out[#out + 1] = text(px + 64, y + 56, 4, 22, sub, esc(it.detail)) end
-    if it.selected then out[#out + 1] = icon(px + pw - 76, y + (row_h - 10) / 2, 26, focused and T.accent or T.accent_soft, ICON.check) end
-    if it.submenu then out[#out + 1] = text(px + pw - 64, y + (row_h - 10) / 2, 6, 28, sub, "›") end
-    add_hit(px + 28, y, W - 28, y + row_h - 10, function() p.cursor = i; panel_activate(it) end, "row:" .. i)
+    local lines = lines_for[i]
+    if lines then
+      local ly = y + 16
+      for k = 1, #lines do
+        out[#out + 1] = text(px + 64, ly, 7, 30, fg, esc(lines[k]), { font = T.font_semibold })
+        ly = ly + 38
+      end
+      if it.detail then out[#out + 1] = text(px + 64, ly + 2, 7, 22, sub, esc(it.detail)) end
+    else
+      local label_y = it.detail and (y + 26) or (y + (h - 10) / 2)
+      out[#out + 1] = text(px + 64, label_y, 4, 30, fg, esc(it.label), { font = T.font_semibold })
+      if it.detail then out[#out + 1] = text(px + 64, y + 56, 4, 22, sub, esc(it.detail)) end
+    end
+    local mid = y + (h - 10) / 2
+    if it.selected then out[#out + 1] = icon(px + pw - 76, mid, 26, focused and T.accent or T.accent_soft, ICON.check) end
+    if it.submenu then out[#out + 1] = text(px + pw - 64, mid, 6, 28, sub, "›") end
+    add_hit(px + 28, y, W - 28, y + h - 10, function() p.cursor = i; panel_activate(it) end, "row:" .. i)
+    y = y + h
+    last = i
   end
-  if #p.items > max_rows then
-    local track_y, track_h = top, max_rows * row_h - 10
-    local thumb_h = math.max(40, track_h * max_rows / #p.items)
-    local thumb_y = track_y + (track_h - thumb_h) * (p.scroll - 1) / (#p.items - max_rows)
+
+  local total_h = span(1, #p.items)
+  if total_h > avail then
+    local shown = math.max(1, y - top)
+    local track_y, track_h = top, math.max(40, avail - 10)
+    local thumb_h = math.max(40, track_h * shown / total_h)
+    local off = span(1, p.scroll - 1)
+    local thumb_y = track_y + (track_h - thumb_h) * clamp(off / math.max(1, total_h - shown), 0, 1)
     out[#out + 1] = rrect(W - 14, track_y, 4, track_h, 2, T.white, "D8")
     out[#out + 1] = rrect(W - 14, thumb_y, 4, thumb_h, 2, T.white, "60")
     out[#out + 1] = text(px + pw / 2, H - 30, 5, 22, T.muted, string.format("%d / %d", p.cursor, #p.items))
@@ -1888,6 +1974,7 @@ mp.register_script_message("danmaku", function(raw)
   S.danmaku.enabled = d.enabled == true
   S.danmaku.visible = d.visible ~= false
   S.danmaku.info = d.info
+  S.danmaku.episode = d.episode
   dm_apply_options(d)
   DM.list = {}
   for _, c in ipairs(type(d.comments) == "table" and d.comments or {}) do

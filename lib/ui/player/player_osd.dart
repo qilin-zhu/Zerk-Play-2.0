@@ -209,6 +209,7 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
       'topLines': s.topLines,
       'bottomLines': s.bottomLines,
       'info': _danmakuInfo(),
+      'episode': _danmaku.matchedTitle,
       'comments': [
         for (final c in _danmaku.comments)
           {
@@ -306,7 +307,11 @@ class _PlayerOsdState extends State<PlayerOsd> with SingleTickerProviderStateMix
     if (title.isNotEmpty) _danmaku.matchedTitle = title;
     final ok = await _danmaku.loadEpisode(DanmakuEpisode(id: id, title: '', sourceId: sourceId));
     if (!mounted) return;
-    model.onToast?.call(ok ? context.l10n.danmakuLoaded('${_danmaku.count}') : context.l10n.danmakuEmpty);
+    final loaded = context.l10n.danmakuLoaded('${_danmaku.count}');
+    // Name what was loaded, not just how many: switching back and forth is the
+    // whole point of this panel.
+    final name = title.length > 42 ? '${title.substring(0, 42)}…' : title;
+    model.onToast?.call(ok ? (name.isEmpty ? loaded : '$loaded · $name') : context.l10n.danmakuEmpty);
   }
 
   /// `<sourceId>#<id>`, so a pick goes back to the server it came from.
