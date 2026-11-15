@@ -195,6 +195,13 @@ final class FnosClient {
   /// GET /v/api/v1/episode/list/{guid}
   Future<Object?> episodeList(String guid) => get('/v/api/v1/episode/list/$guid');
 
+  /// Cast and crew of an item (POST /v/api/v1/person/list/{guid}, `{}` body).
+  Future<Object?> personList(String guid) => post('/v/api/v1/person/list/$guid', body: {});
+
+  /// Stream descriptors (GET /v/api/v1/stream/list/{guid}): video/audio/
+  /// subtitle streams plus files, used for the media info section.
+  Future<Object?> streamList(String guid) => get('/v/api/v1/stream/list/$guid');
+
   /// GET /v/api/v1/search/list?q={keyword}
   Future<Object?> search(String keyword, {int pageSize = 30, int page = 1}) =>
       get('/v/api/v1/search/list', query: {'q': keyword, 'page_size': '$pageSize', 'page': '$page'});

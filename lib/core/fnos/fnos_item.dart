@@ -42,6 +42,9 @@ final class FnOsItem {
   final int? ts;
   final int? duration;
 
+  /// trimemedia types are capitalized (`Movie`, `TV`, `Episode`, `Video`).
+  String get kind => type.toLowerCase();
+
   String? get posterPath {
     final p = poster?.trim();
     if (p != null && p.isNotEmpty && p != '0') return p;
@@ -53,14 +56,14 @@ final class FnOsItem {
   /// (mirrors FlyNarwhal's buildPlayDetailTitle).
   String get displayTitle {
     final t = tvTitle.trim();
-    if (type == 'episode' && t.isNotEmpty) return t;
+    if (kind == 'episode' && t.isNotEmpty) return t;
     final own = title.trim();
     if (own.isNotEmpty) return own;
     return t;
   }
 
   String? get subtitle {
-    if (type == 'episode') {
+    if (kind == 'episode') {
       final s = seasonNumber ?? 0;
       final e = episodeNumber ?? 0;
       if (s > 0 || e > 0) return 'S$s E$e';
@@ -84,7 +87,7 @@ final class FnOsItem {
     return (p / d).clamp(0.0, 1.0);
   }
 
-  IconData get icon => switch (type) {
+  IconData get icon => switch (kind) {
         'tv' => Icons.tv_rounded,
         'episode' => Icons.smart_display_outlined,
         'directory' => Icons.folder_outlined,

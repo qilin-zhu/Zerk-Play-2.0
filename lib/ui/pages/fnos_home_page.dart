@@ -154,7 +154,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
           ?item.subtitle,
           if (seasons > 1) l10n.seasonCount(seasons),
           if (seasons <= 1 && episodes > 0) l10n.episodeCount(episodes),
-          if (duration > 0 && item.type != 'tv') formatRuntime(l10n, Duration(seconds: duration)),
+          if (duration > 0 && item.kind != 'tv') formatRuntime(l10n, Duration(seconds: duration)),
         ],
         rating: double.tryParse(item.voteAverage ?? ''),
         overview: overview,

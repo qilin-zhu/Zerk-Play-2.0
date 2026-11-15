@@ -15,9 +15,9 @@ import '../widgets/common.dart';
 import '../widgets/media_row.dart';
 import '../widgets/net_image.dart';
 
-/// Detail page for a trimemedia item: raw `item/{guid}` plus season and
-/// episode lists. Episodes play directly through the fnOS playback session;
-/// movies and videos get a play button.
+/// Detail page for a trimemedia item: raw `item/{guid}` plus cast, stream
+/// info, and season/episode lists. Episodes play directly through the fnOS
+/// playback session; movies and videos get a play button.
 class FnOsItemPage extends StatefulWidget {
   const FnOsItemPage({super.key, required this.guid, this.seed});
 
@@ -32,6 +32,8 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
   Map<String, Object?>? _detail;
   List<Map<String, Object?>> _seasons = const [];
   List<Map<String, Object?>> _episodes = const [];
+  List<Map<String, Object?>> _persons = const [];
+  Map<String, Object?>? _streams;
   String? _seasonGuid;
   String? _error;
   bool _busy = false;
@@ -61,7 +63,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
       final client = _client;
       final detail = await client.itemDetail(widget.guid);
       final map = detail is Map ? Map<String, Object?>.from(detail) : <String, Object?>{};
-      final type = map['type']?.toString() ?? widget.seed?.type ?? '';
+      final type = (map['type']?.toString() ?? widget.seed?.type ?? '').toLowerCase();
       final seasons = <Map<String, Object?>>[];
       if (type == 'tv') {
         final raw = await client.seasonList(widget.guid);
@@ -74,6 +76,13 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
         _seasons = seasons;
         _busy = false;
       });
+
+      // Cast and stream details load in the background; failures stay silent.
+      unawaited(_loadPersons());
+      if (type == 'movie' || type == 'video' || type == 'episode') {
+        unawaited(_loadStreams());
+      }
+
       if (seasons.length == 1) {
         await _loadEpisodes(_guid(seasons.first));
       } else if (seasons.isEmpty) {
@@ -92,6 +101,30 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
         _error = '$e';
         _busy = false;
       });
+    }
+  }
+
+  Future<void> _loadPersons() async {
+    try {
+      final raw = await _client.personList(widget.guid);
+      final list = raw is Map ? raw['list'] as List? ?? const [] : raw is List ? raw : const [];
+      if (!mounted) return;
+      setState(() {
+        _persons = [for (final e in list) if (e is Map) Map<String, Object?>.from(e)];
+      });
+    } catch (e) {
+      debugPrint('[fnos] persons: $e');
+    }
+  }
+
+  Future<void> _loadStreams() async {
+    try {
+      final raw = await _client.streamList(widget.guid);
+      final map = raw is Map ? Map<String, Object?>.from(raw) : null;
+      if (map == null || !mounted) return;
+      setState(() => _streams = map);
+    } catch (e) {
+      debugPrint('[fnos] stream list: $e');
     }
   }
 
@@ -117,7 +150,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final detail = _detail;
-    final type = detail == null ? widget.seed?.type : detail['type']?.toString() ?? '';
+    final type = (detail == null ? widget.seed?.type : detail['type']?.toString())?.toLowerCase() ?? '';
     final playable = type == 'movie' || type == 'video' || type == 'episode';
     return Scaffold(
       body: _error != null
@@ -145,6 +178,14 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
                       padding: EdgeInsets.only(left: contentLeft, top: 6, right: 140),
                       child: Text(detail['overview']!.toString(), style: Zt.body.copyWith(height: 1.5)),
                     ),
+                  if (_streams != null) ...[
+                    const SizedBox(height: 30),
+                    _mediaInfo(context),
+                  ],
+                  if (_persons.isNotEmpty) ...[
+                    const SizedBox(height: 30),
+                    _cast(context),
+                  ],
                   if (_seasons.length > 1) ...[
                     const SizedBox(height: 36),
                     Padding(
@@ -200,6 +241,11 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     final episodes = (map['number_of_episodes'] as num?)?.toInt() ?? seed?.numberOfEpisodes ?? 0;
     if (seasons > 1) parts.add(l10n.seasonNumber(seasons));
     if (episodes > 0 && seasons > 0) parts.add(l10n.episodeCount(episodes));
+    final duration = (map['duration'] as num?)?.toInt() ?? seed?.duration ?? 0;
+    if (duration > 0 && seasons == 0) {
+      final mins = duration ~/ 60;
+      parts.add(mins >= 60 ? l10n.runtimeHoursMinutes(mins ~/ 60, mins % 60) : l10n.runtimeMinutes(mins));
+    }
     return parts.join('  ·  ');
   }
 
@@ -208,7 +254,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     final seed = widget.seed;
     final title = detail == null
         ? (seed?.displayTitle ?? '')
-        : ((detail['type']?.toString() == 'episode' && (detail['tv_title']?.toString().isNotEmpty ?? false))
+        : ((detail['type']?.toString().toLowerCase() == 'episode' && (detail['tv_title']?.toString().isNotEmpty ?? false))
             ? detail['tv_title']!.toString()
             : detail['title']?.toString() ?? seed?.displayTitle ?? '');
     final backdrop = _s(detail ?? const {}, 'backdrops');
@@ -291,6 +337,95 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
           ]),
         ),
       ],
+    );
+  }
+
+  /// Media stream info from stream/list: resolution, codec, audio/subtitles.
+  Widget _mediaInfo(BuildContext context) {
+    final streams = _streams;
+    if (streams == null) return const SizedBox.shrink();
+    final videos = [for (final v in (streams['video_streams'] as List? ?? const [])) if (v is Map) v];
+    final audios = [for (final v in (streams['audio_streams'] as List? ?? const [])) if (v is Map) v];
+    final subs = [for (final v in (streams['subtitle_streams'] as List? ?? const [])) if (v is Map) v];
+    final l10n = context.l10n;
+    final lines = <String>[];
+    if (videos.isNotEmpty) {
+      final v = videos.first;
+      final res = _s(v, 'resolution_type');
+      final codec = _s(v, 'codec_name');
+      final profile = _s(v, 'profile');
+      final w = (v['width'] as num?)?.toInt() ?? 0;
+      final h = (v['height'] as num?)?.toInt() ?? 0;
+      final range = _s(v, 'color_range_type');
+      final parts = [
+        if (res != null) res,
+        if (w > 0 && h > 0) '$w×$h',
+        if (codec != null) codec.toUpperCase(),
+        if (profile != null) profile,
+        if (range != null) range,
+      ];
+      if (parts.isNotEmpty) lines.add('${l10n.infoVideo}: ${parts.join('  ·  ')}');
+    }
+    if (audios.isNotEmpty) {
+      final codecs = {
+        for (final a in audios)
+          if (_s(a, 'codec_name') != null) _s(a, 'codec_name')!.toUpperCase(),
+      };
+      if (codecs.isNotEmpty) lines.add('${l10n.audio}: ${codecs.join(' / ')}  (${l10n.episodeCount(audios.length)})');
+    }
+    if (subs.isNotEmpty) lines.add('${l10n.subtitles}: ${l10n.episodeCount(subs.length)}');
+    if (lines.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(left: contentLeft, right: 140),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(l10n.playbackInfo, style: Zt.title),
+        const SizedBox(height: 10),
+        for (final line in lines)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(line, style: Zt.body.copyWith(fontSize: 20)),
+          ),
+      ]),
+    );
+  }
+
+  /// Cast and crew row: avatar, name, and the character or job.
+  Widget _cast(BuildContext context) {
+    final client = _client;
+    final persons = _persons;
+    if (persons.isEmpty) return const SizedBox.shrink();
+    return MediaRow(
+      title: context.l10n.castAndCrew,
+      height: 250,
+      itemCount: persons.length,
+      itemBuilder: (context, i) {
+        final p = persons[i];
+        final name = _s(p, 'name') ?? _s(p, 'original_name') ?? '';
+        final job = _s(p, 'job') ?? '';
+        final role = job == 'Actor' ? _s(p, 'role') : job;
+        final profile = _s(p, 'profile_path');
+        return SizedBox(
+          width: 120,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(
+              width: 110,
+              height: 150,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: NetImage(
+                  url: profile == null ? null : Uri.parse(client.imageUrl(profile, width: 220)),
+                  headers: client.imageHeaders,
+                  fallback: TitleArt(title: name, icon: Icons.person_outline_rounded),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Zt.label.copyWith(fontSize: 19)),
+            if (role != null && role.isNotEmpty)
+              Text(role, maxLines: 1, overflow: TextOverflow.ellipsis, style: Zt.caption.copyWith(fontSize: 17)),
+          ]),
+        );
+      },
     );
   }
 

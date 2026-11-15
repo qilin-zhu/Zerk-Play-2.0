@@ -100,6 +100,14 @@ final class FnOsPlayback {
 
       final url = client.directStreamUrl(_mediaGuid);
       debugPrint('[fnos] play ${item.displayTitle} media=$_mediaGuid start=$ts');
+      // The web player opens a stream session before serving media/range; do
+      // the same so the server has the media registered. Failures are fine —
+      // direct play works against FlyNarwhal without it too.
+      try {
+        await client.stream(_mediaGuid);
+      } catch (e) {
+        debugPrint('[fnos] stream session: $e');
+      }
       backend.load(
         Uri.parse(url),
         start: ts > 0 ? Duration(seconds: ts) : null,
