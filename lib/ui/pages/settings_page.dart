@@ -11,11 +11,9 @@ import '../../core/host.dart';
 import '../../core/log/app_log.dart';
 import '../../core/log/log_upload.dart';
 import '../../core/windows/native_window.dart';
-import '../../data/xtream/live_catalog.dart';
-import '../../data/xtream/xtream.dart';
+import '../../data/xtream/live_catalog.dart';import '../../data/xtream/xtream.dart';
 import '../../data/metadata_localizer.dart';
-import '../../l10n/l10n.dart';
-import '../../playback/danmaku/danmaku_settings.dart';
+import '../../l10n/l10n.dart';import '../../playback/danmaku/danmaku_settings.dart';
 import '../../playback/danmaku/danmaku_source.dart';
 import '../../playback/language.dart';
 import '../../playback/mpv_conf.dart';
@@ -38,6 +36,7 @@ import '../widgets/side_panel.dart';
 import '../widgets/subtitle_preview.dart';
 import '../widgets/update_dialog.dart';
 import '../widgets/value_slider.dart';
+import 'fnos_test_page.dart';
 import 'home_collections_page.dart';
 
 enum _Section {
@@ -811,6 +810,14 @@ class _SettingsPageState extends State<SettingsPage> {
       case _Section.diagnostics:
         return [
           _intro(l10n.logsIntro),
+          SettingActionRow(
+            title: l10n.fnosTest,
+            subtitle: l10n.fnosTestIntro,
+            icon: Icons.dns_rounded,
+            onSelect: () => Navigator.of(context).push(
+              tvRoute<void>(const FnosTestPage(), name: 'settings/fnos-test'),
+            ),
+          ),
           if (Host.isDesktop)
             SettingToggleRow(
               title: l10n.detailedLog,

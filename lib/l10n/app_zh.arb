@@ -751,5 +751,20 @@
   "danmakuEditAppSecret": "修改 AppSecret",
   "danmakuRemove": "删除",
   "danmakuRememberManual": "记忆手动选择的弹幕",
-  "danmakuRememberManualHint": "下次播放优先使用上次手动选择的集"
+  "danmakuRememberManualHint": "下次播放优先使用上次手动选择的集",
+  "fnosTest": "飞牛连接测试",
+  "fnosTestIntro": "填写飞牛影视的地址和账号，跑一遍登录、媒体库、条目和播放地址，并把原始返回打出来。",
+  "fnosHost": "服务器地址",
+  "fnosUsername": "账号",
+  "fnosPassword": "密码",
+  "fnosRun": "开始测试",
+  "fnosRunning": "测试中…",
+  "fnosStepLogin": "登录",
+  "fnosLibrariesFound": "{count} 个媒体库",
+  "fnosItemsFound": "{count} 个条目",
+  "fnosNoItem": "第一个媒体库里没有条目",
+  "fnosNoMedia": "播放信息里没有 media guid",
+  "fnosDone": "完成",
+  "fnosFailed": "失败",
+  "fnosHostRequired": "请先填写服务器地址"
 }

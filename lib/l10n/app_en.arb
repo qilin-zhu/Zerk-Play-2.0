@@ -1613,5 +1613,34 @@
   "danmakuEditAppSecret": "Edit AppSecret",
   "danmakuRemove": "Remove",
   "danmakuRememberManual": "Remember manual picks",
-  "danmakuRememberManualHint": "Reuse the episode you picked by hand next time"
+  "danmakuRememberManualHint": "Reuse the episode you picked by hand next time",
+  "fnosTest": "fnOS connection test",
+  "fnosTestIntro": "Enter the address and account of your fnOS media server, then run the check: login, libraries, items and the play address, with the raw responses printed.",
+  "fnosHost": "Server address",
+  "fnosUsername": "Username",
+  "fnosPassword": "Password",
+  "fnosRun": "Run test",
+  "fnosRunning": "Running…",
+  "fnosStepLogin": "login",
+  "fnosLibrariesFound": "{count} libraries",
+  "@fnosLibrariesFound": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "fnosItemsFound": "{count} items",
+  "@fnosItemsFound": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "fnosNoItem": "No items in the first library",
+  "fnosNoMedia": "The play info did not contain a media guid",
+  "fnosDone": "Done",
+  "fnosFailed": "Failed",
+  "fnosHostRequired": "Enter the server address first"
 }
