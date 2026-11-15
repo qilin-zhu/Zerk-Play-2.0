@@ -206,6 +206,23 @@ final class FnosClient {
   Future<Object?> search(String keyword, {int pageSize = 30, int page = 1}) =>
       get('/v/api/v1/search/list', query: {'q': keyword, 'page_size': '$pageSize', 'page': '$page'});
 
+  /// Favorited items (POST /v/api/v1/favorite/list, same query as item/list).
+  Future<Object?> favoriteList({
+    String? ancestorGuid,
+    List<String> types = const [],
+    int pageSize = 50,
+    int page = 1,
+  }) =>
+      post('/v/api/v1/favorite/list', body: {
+        if (ancestorGuid != null && ancestorGuid.isNotEmpty) 'ancestor_guid': ancestorGuid,
+        'exclude_grouped_video': 1,
+        'sort_type': 'DESC',
+        'sort_column': 'create_time',
+        'page_size': pageSize,
+        'page': page,
+        'tags': {'type': types},
+      });
+
   /// Playback descriptors for an item: guids for video/audio/subtitle plus the
   /// media that `/v/api/v1/stream` turns into a playable URL.
   Future<Object?> playInfo(String itemGuid, {String? mediaGuid}) => post('/v/api/v1/play/info',

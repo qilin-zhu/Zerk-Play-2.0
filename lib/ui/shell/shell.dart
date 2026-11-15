@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/app_services.dart';
+import '../../core/emby/server_kind.dart';
 import '../../core/log/app_log.dart';
 import '../../data/user_profile.dart';
 import '../../l10n/l10n.dart';
@@ -21,6 +22,10 @@ import '../pages/calendar_page.dart';
 import '../pages/collections_page.dart';
 import '../pages/discover_page.dart';
 import '../pages/emby_live_tv_page.dart';
+import '../pages/fnos_collections_page.dart';
+import '../pages/fnos_home_page.dart';
+import '../pages/fnos_library_page.dart';
+import '../pages/fnos_search_page.dart';
 import '../pages/home_page.dart';
 import '../pages/library_page.dart';
 import '../pages/live_tv_page.dart';
@@ -131,7 +136,7 @@ class _ShellState extends State<Shell> {
 
   Future<void> _publishTvHome() async {
     _tvHomeTimer?.cancel();
-    if (!_services.isSignedIn) return;
+    if (!_services.isSignedIn || _isFnos) return;
     try {
       await TvHome.publish(_services.catalog);
     } catch (e) {
@@ -140,6 +145,7 @@ class _ShellState extends State<Shell> {
   }
 
   Future<void> _openLaunch() async {
+    if (_isFnos) return;
     final id = await TvHome.takeLaunch();
     if (id == null || !mounted || playbackActive) return;
     debugPrint('[tvhome] launched for $id');
@@ -209,13 +215,32 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
-  List<ShellTab> _tabs(AppServices s) => [
-    for (final t in ShellTab.values)
-      if ((t != ShellTab.discover || s.seerr != null) && (t != ShellTab.calendar || s.tmdb != null || s.seerr != null) &&
-          (t != ShellTab.liveTv || s.liveTvAvailable || s.embyTvAvailable) &&
-          (t != ShellTab.together || s.together.available) &&
-          ((t != ShellTab.myList && t != ShellTab.profile) || s.profiles.profile != null)) t,
-  ];
+  bool get _isFnos => _services.isSignedIn && _services.janus.session.kind == ServerKind.fnos;
+
+  List<ShellTab> _tabs(AppServices s) {
+    // 飞牛影视 sessions browse fnOS data: only the backend-independent tabs are
+    // offered (search/library/discover/calendar query the Emby catalog, the
+    // profile belongs to the Emby user).
+    if (_isFnos) {
+      return [
+        ShellTab.search,
+        ShellTab.home,
+        ShellTab.myList,
+        ShellTab.favorites,
+        ShellTab.movies,
+        ShellTab.shows,
+        ShellTab.collections,
+        if (s.liveTvAvailable) ShellTab.liveTv,
+      ];
+    }
+    return [
+      for (final t in ShellTab.values)
+        if ((t != ShellTab.discover || s.seerr != null) && (t != ShellTab.calendar || s.tmdb != null || s.seerr != null) &&
+            (t != ShellTab.liveTv || s.liveTvAvailable || s.embyTvAvailable) &&
+            (t != ShellTab.together || s.together.available) &&
+            ((t != ShellTab.myList && t != ShellTab.profile) || s.profiles.profile != null)) t,
+    ];
+  }
 
   void _select(ShellTab tab) {
     final firstVisit = !_visited.contains(tab);
@@ -326,21 +351,35 @@ class _ShellState extends State<Shell> {
     );
   }
 
-  Widget _page(ShellTab t) => switch (t) {
-    ShellTab.home => const HomePage(),
-    ShellTab.search => const SearchPage(),
-    ShellTab.movies => const LibraryPage(kind: LibraryKind.movies),
-    ShellTab.shows => const LibraryPage(kind: LibraryKind.shows),
-    ShellTab.favorites => const LibraryPage(kind: LibraryKind.favorites),
-    ShellTab.collections => const CollectionsPage(),
-    ShellTab.discover => const DiscoverPage(),
-    ShellTab.calendar => const CalendarPage(),
-    ShellTab.liveTv => AppServicesScope.read(context).liveTvAvailable ? const LiveTvPage() : const EmbyLiveTvPage(),
-    ShellTab.together => const TogetherPage(),
-    ShellTab.myList => const MyListPage(),
-    ShellTab.profile => const ProfilePage(),
-    ShellTab.settings => const SettingsPage(),
-  };
+  Widget _page(ShellTab t) {
+    if (_isFnos) {
+      return switch (t) {
+        ShellTab.home => const FnOsHomePage(),
+        ShellTab.search => const FnOsSearchPage(),
+        ShellTab.myList || ShellTab.favorites => const FnOsLibraryPage(kind: FnOsLibraryKind.favorites),
+        ShellTab.movies => const FnOsLibraryPage(kind: FnOsLibraryKind.movies),
+        ShellTab.shows => const FnOsLibraryPage(kind: FnOsLibraryKind.shows),
+        ShellTab.collections => const FnOsCollectionsPage(),
+        ShellTab.liveTv => const LiveTvPage(),
+        _ => const SettingsPage(),
+      };
+    }
+    return switch (t) {
+      ShellTab.home => const HomePage(),
+      ShellTab.search => const SearchPage(),
+      ShellTab.movies => const LibraryPage(kind: LibraryKind.movies),
+      ShellTab.shows => const LibraryPage(kind: LibraryKind.shows),
+      ShellTab.favorites => const LibraryPage(kind: LibraryKind.favorites),
+      ShellTab.collections => const CollectionsPage(),
+      ShellTab.discover => const DiscoverPage(),
+      ShellTab.calendar => const CalendarPage(),
+      ShellTab.liveTv => AppServicesScope.read(context).liveTvAvailable ? const LiveTvPage() : const EmbyLiveTvPage(),
+      ShellTab.together => const TogetherPage(),
+      ShellTab.myList => const MyListPage(),
+      ShellTab.profile => const ProfilePage(),
+      ShellTab.settings => const SettingsPage(),
+    };
+  }
 }
 
 enum _Group {
