@@ -47,6 +47,9 @@ final class JanusService {
     return client;
   }
 
+  /// Stable per-device id (also used for fnOS play/record reporting).
+  Future<String> getDeviceId() => _ensureDeviceId();
+
   Future<String> getServerUrl() async {
     return (await _store.getString(_kServerUrl)) ?? '';
   }

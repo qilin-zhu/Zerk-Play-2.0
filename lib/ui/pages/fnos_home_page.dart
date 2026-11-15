@@ -1,89 +1,26 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app/app_services.dart';
 import '../../core/fnos/fnos_client.dart';
+import '../../core/fnos/fnos_item.dart';
 import '../../l10n/l10n.dart';
+import '../../playback/fnos_playback.dart' show playFnOs;
 import '../core/navigation.dart';
 import '../focus/focus_zone.dart';
 import '../focus/tv_focusable.dart';
 import '../theme/tokens.dart';
+import '../widgets/backdrop.dart';
 import '../widgets/common.dart';
 import '../widgets/media_row.dart';
 import '../widgets/net_image.dart';
+import 'hero.dart' show HeroInfo, HeroPanel, formatRuntime;
 import 'fnos_item_page.dart';
 
-/// One entry of trimemedia's `item/list` response, parsed defensively: the
-/// server's field set varies by type (movie / tv / episode / video / folder).
-final class FnOsItem {
-  FnOsItem.from(Map raw)
-      : guid = raw['guid']?.toString() ?? '',
-        title = raw['title']?.toString() ?? '',
-        tvTitle = raw['tv_title']?.toString() ?? '',
-        parentGuid = raw['parent_guid']?.toString() ?? '',
-        type = raw['type']?.toString() ?? '',
-        poster = raw['poster']?.toString(),
-        posterList = [
-          for (final p in (raw['poster_list'] as List? ?? const []))
-            if (p != null) p.toString(),
-        ],
-        seasonNumber = (raw['season_number'] as num?)?.toInt(),
-        episodeNumber = (raw['episode_number'] as num?)?.toInt(),
-        numberOfSeasons = (raw['number_of_seasons'] as num?)?.toInt(),
-        releaseDate = raw['release_date']?.toString(),
-        voteAverage = raw['vote_average']?.toString(),
-        watched = raw['watched']?.toString() == '1',
-        duration = (raw['duration'] as num?)?.toInt();
-
-  final String guid;
-  final String title;
-  final String tvTitle;
-  final String parentGuid;
-  final String type;
-  final String? poster;
-  final List<String> posterList;
-  final int? seasonNumber;
-  final int? episodeNumber;
-  final int? numberOfSeasons;
-  final String? releaseDate;
-  final String? voteAverage;
-  final bool watched;
-  final int? duration;
-
-  String? get posterPath {
-    final p = poster?.trim();
-    if (p != null && p.isNotEmpty) return p;
-    if (posterList.isNotEmpty) return posterList.first;
-    return null;
-  }
-
-  /// Episodes carry the show title in `tv_title`; use it as the grid title
-  /// (mirrors FlyNarwhal's buildPlayDetailTitle).
-  String get displayTitle {
-    final t = tvTitle.trim();
-    return (type == 'episode' && t.isNotEmpty) ? t : (title.trim().isEmpty ? tvTitle.trim() : title.trim());
-  }
-
-  String? get subtitle {
-    if (type == 'episode') {
-      final s = seasonNumber ?? 0;
-      final e = episodeNumber ?? 0;
-      if (s > 0 || e > 0) return 'S$s E$e';
-      return null;
-    }
-    final date = releaseDate?.trim();
-    return date != null && date.length >= 4 ? date.substring(0, 4) : null;
-  }
-
-  IconData get icon => switch (type) {
-        'tv' => Icons.tv_rounded,
-        'episode' => Icons.smart_display_outlined,
-        'directory' => Icons.folder_outlined,
-        _ => Icons.movie_outlined,
-      };
-}
-
-/// Landing page for 飞牛影视 (fnOS trimemedia) sessions: a poster wall of
-/// everything the server has, straight from `item/list`.
+/// Landing page for 飞牛影视 (fnOS trimemedia) sessions: hero backdrop panel
+/// on top (updates as focus moves), continue-watching row from play/list and a
+/// poster wall of everything else.
 class FnOsHomePage extends StatefulWidget {
   const FnOsHomePage({super.key});
 
@@ -93,8 +30,12 @@ class FnOsHomePage extends StatefulWidget {
 
 class _FnOsHomePageState extends State<FnOsHomePage> {
   List<FnOsItem>? _items;
+  List<FnOsItem> _resume = const [];
   String? _error;
   bool _busy = false;
+  bool _heroSet = false;
+  final _hero = Debounced<HeroInfo?>(null);
+  final _details = <String, Map<String, Object?>>{};
 
   FnosClient get _client => AppServicesScope.read(context).janus.fnos!;
 
@@ -102,6 +43,12 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
+  }
+
+  @override
+  void dispose() {
+    _hero.dispose();
+    super.dispose();
   }
 
   Future<void> _reload() async {
@@ -117,15 +64,29 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
         final data = await client.itemList(pageSize: 60, page: page);
         final list = _rawList(data);
         if (list.isEmpty) break;
-        items.addAll([for (final e in list) if (e is Map) FnOsItem.from(e.cast<String, Object?>())]);
+        items.addAll([for (final e in list) if (e is Map) FnOsItem.from(e)]);
         final total = data is Map ? (data['total'] as num?)?.toInt() ?? 0 : 0;
         if (items.length >= total) break;
+      }
+      final resume = <FnOsItem>[];
+      try {
+        final played = await client.playList();
+        if (played is List) {
+          resume.addAll([for (final e in played) if (e is Map) FnOsItem.from(e)]);
+        }
+      } catch (e) {
+        debugPrint('[fnos] play/list: $e');
       }
       if (!mounted) return;
       setState(() {
         _items = items;
+        _resume = [for (final r in resume) if (r.isResumable) r];
         _busy = false;
       });
+      if (!_heroSet && items.isNotEmpty) {
+        _heroSet = true;
+        _focusFnos(items.first, immediate: true);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -141,100 +102,204 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     return const [];
   }
 
+  String? _s(Map m, String key) {
+    final v = m[key]?.toString();
+    return v == null || v.isEmpty || v == '0' ? null : v;
+  }
+
+  void _focusFnos(FnOsItem item, {bool immediate = false}) {
+    _hero.set(
+      HeroInfo(
+        key: item.guid,
+        title: item.displayTitle,
+        meta: [?item.subtitle],
+        rating: double.tryParse(item.voteAverage ?? ''),
+      ),
+      immediate: immediate,
+    );
+    unawaited(_heroDetail(item));
+  }
+
+  Future<void> _heroDetail(FnOsItem item) async {
+    final cached = _details[item.guid];
+    if (cached != null) {
+      _heroFromDetail(item, cached);
+      return;
+    }
+    try {
+      final raw = await _client.itemDetail(item.guid);
+      final map = raw is Map ? Map<String, Object?>.from(raw) : null;
+      if (map == null || !mounted) return;
+      _details[item.guid] = map;
+      _heroFromDetail(item, map);
+    } catch (e) {
+      debugPrint('[fnos] hero detail ${item.guid}: $e');
+    }
+  }
+
+  void _heroFromDetail(FnOsItem item, Map<String, Object?> map) {
+    final l10n = context.l10n;
+    final backdrop = _s(map, 'backdrops');
+    if (backdrop == null) return;
+    final seasons = (map['number_of_seasons'] as num?)?.toInt() ?? item.numberOfSeasons ?? 0;
+    final episodes = (map['number_of_episodes'] as num?)?.toInt() ?? item.numberOfEpisodes ?? 0;
+    final duration = (map['duration'] as num?)?.toInt() ?? item.duration ?? 0;
+    final overview = _s(map, 'overview');
+    _hero.set(
+      HeroInfo(
+        key: item.guid,
+        title: item.displayTitle,
+        backdrop: Uri.parse(_client.imageUrl(backdrop, width: 1280)),
+        meta: [
+          ?item.subtitle,
+          if (seasons > 1) l10n.seasonCount(seasons),
+          if (seasons <= 1 && episodes > 0) l10n.episodeCount(episodes),
+          if (duration > 0 && item.type != 'tv') formatRuntime(l10n, Duration(seconds: duration)),
+        ],
+        rating: double.tryParse(item.voteAverage ?? ''),
+        overview: overview,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final items = _items;
     final columns = AppServicesScope.of(context).settings.posterSize.columns;
+    final cardW = posterGridCardWidth(MediaQuery.sizeOf(context).width, columns);
+    final height = MediaQuery.sizeOf(context).height;
+    final heroHeight = height * 0.44;
+    final resume = _resume;
     return Scaffold(
-      body: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: EdgeInsets.only(left: contentLeft, top: 70, right: 120, bottom: 26),
-          child: Row(children: [
-            Text(l10n.fnosHomeTitle, style: Zt.headline),
-            const SizedBox(width: 18),
-            if (items != null && items.isNotEmpty) Text('${items.length}', style: Zt.title.copyWith(color: Zc.textFaint)),
-            const Spacer(),
-            FocusZone(
-              debugLabel: 'fnos-header-actions',
-              child: Row(children: [
-                TvButton(
-                  label: _busy ? l10n.fnosRefreshing : l10n.tryAgain,
-                  icon: Icons.refresh_rounded,
-                  onSelect: _reload,
-                ),
-                const SizedBox(width: 16),
-                TvButton(
-                  label: l10n.signOut,
-                  icon: Icons.logout_rounded,
-                  onSelect: () => AppServicesScope.read(context).signOut(),
-                ),
-              ]),
+      body: Stack(children: [
+        Positioned.fill(
+          child: ValueListenableBuilder(
+            valueListenable: _hero,
+            builder: (_, info, _) => Backdrop(url: info?.backdrop, headers: _client.imageHeaders),
+          ),
+        ),
+        Positioned(
+          left: contentLeft,
+          top: 0,
+          height: heroHeight,
+          right: 560,
+          child: Align(
+            alignment: Alignment.bottomLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 24),
+              child: ValueListenableBuilder(valueListenable: _hero, builder: (_, info, _) => HeroPanel(info: info)),
             ),
-          ]),
+          ),
         ),
-        Expanded(
-          child: _error != null
-              ? _message(l10n.fnosLoadFailed(_error!), l10n.tryAgain, _reload)
-              : items != null && items.isEmpty
-                  ? _message(l10n.fnosEmpty, l10n.tryAgain, _reload)
-                  : LayoutBuilder(builder: (context, box) {
-                      final cardW = posterGridCardWidth(box.maxWidth, columns);
-                      return FocusZone(
-                        debugLabel: 'fnos-grid',
-                        child: GridView.builder(
-                          clipBehavior: Clip.none,
-                          padding: EdgeInsets.fromLTRB(contentLeft, 16, 120, 140),
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: columns,
-                            mainAxisSpacing: 26,
-                            crossAxisSpacing: Zs.cardGap,
-                            childAspectRatio: cardW / (cardW * 1.5 + 70),
-                          ),
-                          itemCount: items?.length ?? 14,
-                          itemBuilder: (context, i) {
-                            if (items == null) return SkeletonBox(width: cardW, height: cardW * 1.5);
-                            final data = items[i];
-                            return Align(
-                              alignment: Alignment.topLeft,
-                              child: LayoutBuilder(
-                                builder: (context, inner) =>
-                                    _FnosCard(item: data, width: inner.maxWidth, autofocus: i == 0),
-                              ),
-                            );
-                          },
+        Positioned(
+          top: 60,
+          right: 120,
+          child: FocusZone(
+            debugLabel: 'fnos-header-actions',
+            child: Row(children: [
+              TvButton(
+                label: _busy ? l10n.fnosRefreshing : l10n.tryAgain,
+                icon: Icons.refresh_rounded,
+                onSelect: _reload,
+              ),
+              const SizedBox(width: 16),
+              TvButton(
+                label: l10n.signOut,
+                icon: Icons.logout_rounded,
+                onSelect: () => AppServicesScope.read(context).signOut(),
+              ),
+            ]),
+          ),
+        ),
+        if (_error != null)
+          Positioned(
+            left: contentLeft,
+            top: heroHeight,
+            right: 120,
+            child: _message(l10n.fnosLoadFailed(_error!), l10n.tryAgain, _reload),
+          )
+        else if (items != null && items.isEmpty)
+          Positioned(
+            left: contentLeft,
+            top: heroHeight,
+            right: 120,
+            child: _message(l10n.fnosEmpty, l10n.tryAgain, _reload),
+          )
+        else
+          Positioned.fill(
+            top: heroHeight,
+            child: FocusZone(
+              debugLabel: 'fnos-content',
+              child: CustomScrollView(
+                slivers: [
+                  if (resume.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: MediaRow(
+                        title: l10n.continueWatching,
+                        height: Zs.landscapeWidth * 0.5625 + 76,
+                        itemCount: resume.length,
+                        itemBuilder: (context, i) => _ResumeCard(
+                          item: resume[i],
+                          width: Zs.landscapeWidth,
+                          onFocus: () => _focusFnos(resume[i]),
                         ),
-                      );
-                    }),
-        ),
+                      ),
+                    ),
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(contentLeft, resume.isEmpty ? 16 : 0, 120, 160),
+                    sliver: SliverGrid(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        mainAxisSpacing: 26,
+                        crossAxisSpacing: Zs.cardGap,
+                        childAspectRatio: cardW / (cardW * 1.5 + 70),
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, i) {
+                          if (items == null) return SkeletonBox(width: cardW, height: cardW * 1.5);
+                          final data = items[i];
+                          return _FnosCard(item: data, onFocus: () => _focusFnos(data), autofocus: i == 0 && resume.isEmpty);
+                        },
+                        childCount: items?.length ?? 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
       ]),
     );
   }
 
-  Widget _message(String text, String action, VoidCallback onSelect) => Padding(
-        padding: EdgeInsets.only(left: contentLeft, top: 40, right: 120),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  Widget _message(String text, String action, VoidCallback onSelect) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
           ConstrainedBox(constraints: const BoxConstraints(maxWidth: 900), child: Text(text, style: Zt.body)),
           const SizedBox(height: 24),
           TvButton(label: action, icon: Icons.refresh_rounded, onSelect: onSelect),
-        ]),
+        ],
       );
 }
 
 class _FnosCard extends StatelessWidget {
-  const _FnosCard({required this.item, required this.width, this.autofocus = false});
+  const _FnosCard({required this.item, this.onFocus, this.autofocus = false});
 
   final FnOsItem item;
-  final double width;
+  final VoidCallback? onFocus;
   final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
     final client = AppServicesScope.read(context).janus.fnos;
     final path = item.posterPath;
+    final width = posterGridCardWidth(MediaQuery.sizeOf(context).width, AppServicesScope.of(context).settings.posterSize.columns);
     final height = width * 1.5;
     return TvFocusable(
       autofocus: autofocus,
+      onFocusChange: (f) => f ? onFocus?.call() : null,
       onSelect: () => Navigator.of(context).push(
         tvRoute(FnOsItemPage(guid: item.guid, seed: item), name: 'fnos:${item.guid}'),
       ),
@@ -268,8 +333,67 @@ class _FnosCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Text(item.displayTitle,
-              maxLines: 1, overflow: TextOverflow.ellipsis, style: Zt.label.copyWith(fontSize: 22)),
+          Text(item.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: Zt.label.copyWith(fontSize: 22)),
+          if (item.subtitle != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(item.subtitle!, style: Zt.caption.copyWith(fontSize: 18, color: Zc.textFaint)),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Continue-watching card: landscape still with a progress strip.
+class _ResumeCard extends StatelessWidget {
+  const _ResumeCard({required this.item, required this.width, this.onFocus});
+
+  final FnOsItem item;
+  final double width;
+  final VoidCallback? onFocus;
+
+  @override
+  Widget build(BuildContext context) {
+    final client = AppServicesScope.read(context).janus.fnos;
+    final path = item.posterPath;
+    final imageH = width * 0.5625;
+    final l10n = context.l10n;
+    return TvFocusable(
+      onFocusChange: (f) => f ? onFocus?.call() : null,
+      onSelect: () => unawaited(playFnOs(context, item)),
+      builder: (context, focused) => SizedBox(
+        width: width,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          FocusFrame(
+            focused: focused,
+            child: SizedBox(
+              width: width,
+              height: imageH,
+              child: Stack(fit: StackFit.expand, children: [
+                NetImage(
+                  url: path == null || client == null ? null : Uri.parse(client.imageUrl(path, width: 760)),
+                  headers: client?.imageHeaders,
+                  width: width,
+                  fallback: TitleArt(title: item.displayTitle, icon: item.icon),
+                ),
+                if (item.progress != null)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ProgressStrip(item.progress!, height: 5),
+                  ),
+                Positioned(
+                  top: 10,
+                  left: 10,
+                  child: Pill(l10n.keepWatching),
+                ),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(item.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: Zt.label.copyWith(fontSize: 22)),
           if (item.subtitle != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),

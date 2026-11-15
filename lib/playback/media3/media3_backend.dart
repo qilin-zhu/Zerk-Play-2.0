@@ -90,7 +90,7 @@ final class Media3Backend implements PlayerBackend {
   }
 
   @override
-  void load(Uri url, {Duration? start, int? audioOrdinal, int? subtitleOrdinal, String? dolbyVision}) {
+  void load(Uri url, {Duration? start, int? audioOrdinal, int? subtitleOrdinal, String? dolbyVision, Map<String, String>? headers}) {
     _state.value = const PlayerState();
     _call('load', {
       'url': url.toString(),
@@ -98,6 +98,7 @@ final class Media3Backend implements PlayerBackend {
       'audio': audioOrdinal,
       'sub': subtitleOrdinal,
       'dolbyVision': dolbyVision,
+      if (headers != null && headers.isNotEmpty) 'headers': headers,
     });
   }
 

@@ -186,12 +186,18 @@ final class MpvBackend implements PlayerBackend {
   }
 
   @override
-  void load(Uri url, {Duration? start, int? audioOrdinal, int? subtitleOrdinal, String? dolbyVision}) {
+  void load(Uri url, {Duration? start, int? audioOrdinal, int? subtitleOrdinal, String? dolbyVision, Map<String, String>? headers}) {
     final opts = <String>[
       if (start != null && start > Duration.zero) 'start=${start.inMilliseconds / 1000}',
       'aid=${audioOrdinal ?? 'auto'}',
       'sid=${subtitleOrdinal ?? 'no'}',
     ];
+    // Per-file option. mpv splits the header list on commas, so header values
+    // must not contain one (fnOS cookies and tokens never do).
+    final hs = headers;
+    if (hs != null && hs.isNotEmpty) {
+      opts.add('http-header-fields=${[for (final e in hs.entries) '${e.key}: ${e.value}'].join(',')}');
+    }
     _mpv.command(['loadfile', url.toString(), 'replace', '-1', opts.join(',')]);
   }
 

@@ -7,7 +7,7 @@ import '../theme/tokens.dart';
 import 'net_image.dart';
 
 class Backdrop extends StatelessWidget {
-  const Backdrop({super.key, required this.url, this.drift = false, this.dim = 0.0, this.scrims = true, this.video});
+  const Backdrop({super.key, required this.url, this.drift = false, this.dim = 0.0, this.scrims = true, this.video, this.headers});
 
   final Uri? url;
   final bool drift;
@@ -15,6 +15,7 @@ class Backdrop extends StatelessWidget {
   final double dim;
   final bool scrims;
   final Widget? video;
+  final Map<String, String>? headers;
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +33,7 @@ class Backdrop extends StatelessWidget {
                 key: ValueKey(url),
                 enabled: drift,
                 child: Stack(fit: StackFit.expand, children: [
-                  NetImage(url: url, width: size.width, fit: BoxFit.cover, alignment: Alignment.topRight,
+                  NetImage(url: url, headers: headers, width: size.width, fit: BoxFit.cover, alignment: Alignment.topRight,
                       fadeDuration: Duration.zero),
                   ?video,
                 ]),

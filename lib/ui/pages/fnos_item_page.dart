@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app/app_services.dart';
 import '../../core/fnos/fnos_client.dart';
+import '../../core/fnos/fnos_item.dart';
 import '../../l10n/l10n.dart';
+import '../../playback/fnos_playback.dart' show playFnOs;
 import '../core/navigation.dart';
 import '../focus/focus_zone.dart';
 import '../focus/tv_focusable.dart';
@@ -10,11 +14,10 @@ import '../theme/tokens.dart';
 import '../widgets/common.dart';
 import '../widgets/media_row.dart';
 import '../widgets/net_image.dart';
-import 'fnos_home_page.dart';
 
 /// Detail page for a trimemedia item: raw `item/{guid}` plus season and
-/// episode lists. Playback joins in a later step once the play/info → stream
-/// chain has been verified against a real account.
+/// episode lists. Episodes play directly through the fnOS playback session;
+/// movies and videos get a play button.
 class FnOsItemPage extends StatefulWidget {
   const FnOsItemPage({super.key, required this.guid, this.seed});
 
@@ -41,12 +44,12 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
   }
 
-  String? _s(Map<String, Object?> m, String key) {
+  String? _s(Map m, String key) {
     final v = m[key]?.toString();
-    return v == null || v.isEmpty ? null : v;
+    return v == null || v.isEmpty || v == '0' ? null : v;
   }
 
-  String _guid(Map<String, Object?> m) => m['guid']?.toString() ?? '';
+  String _guid(Map m) => m['guid']?.toString() ?? '';
 
   Future<void> _reload() async {
     if (_busy) return;
@@ -57,13 +60,13 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     try {
       final client = _client;
       final detail = await client.itemDetail(widget.guid);
-      final map = detail is Map ? detail.cast<String, Object?>() : <String, Object?>{};
+      final map = detail is Map ? Map<String, Object?>.from(detail) : <String, Object?>{};
+      final type = map['type']?.toString() ?? widget.seed?.type ?? '';
       final seasons = <Map<String, Object?>>[];
-      if ((map['type']?.toString() ?? '') == 'tv') {
+      if (type == 'tv') {
         final raw = await client.seasonList(widget.guid);
-        if (raw is List) {
-          seasons.addAll([for (final e in raw) if (e is Map) e.cast<String, Object?>()]);
-        }
+        final list = raw is List ? raw : raw is Map ? raw['list'] as List? ?? const [] : const [];
+        seasons.addAll([for (final e in list) if (e is Map) Map<String, Object?>.from(e)]);
       }
       if (!mounted) return;
       setState(() {
@@ -73,10 +76,15 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
       });
       if (seasons.length == 1) {
         await _loadEpisodes(_guid(seasons.first));
-      } else if (seasons.isEmpty && (map['type']?.toString() ?? '') == 'episode') {
-        // An episode opened directly: show its siblings from the parent season.
+      } else if (seasons.isEmpty) {
+        // A season-less tv item may still answer episode/list with every
+        // episode; an opened episode shows its siblings from the parent.
         final parent = widget.seed?.parentGuid ?? _s(map, 'parent_guid') ?? '';
-        if (parent.isNotEmpty) await _loadEpisodes(parent);
+        if (type == 'episode' && parent.isNotEmpty) {
+          await _loadEpisodes(parent);
+        } else if (type == 'tv') {
+          await _loadEpisodes(widget.guid);
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -91,24 +99,26 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     setState(() => _seasonGuid = guid);
     try {
       final raw = await _client.episodeList(guid);
-      final list = raw is List
-          ? raw
-          : raw is Map ? raw['list'] as List? ?? const [] : const [];
+      final list = raw is List ? raw : raw is Map ? raw['list'] as List? ?? const [] : const [];
       if (!mounted) return;
       setState(() {
-        _episodes = [for (final e in list) if (e is Map) e.cast<String, Object?>()];
+        _episodes = [for (final e in list) if (e is Map) Map<String, Object?>.from(e)];
       });
     } catch (e) {
+      debugPrint('[fnos] episode list $guid: $e');
       if (!mounted) return;
       setState(() => _episodes = const []);
     }
   }
+
+  FnOsItem _itemOf(Map m) => FnOsItem.from(m);
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final detail = _detail;
     final type = detail == null ? widget.seed?.type : detail['type']?.toString() ?? '';
+    final playable = type == 'movie' || type == 'video' || type == 'episode';
     return Scaffold(
       body: _error != null
           ? Padding(
@@ -122,7 +132,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
           : ListView(
               padding: EdgeInsets.only(bottom: 140),
               children: [
-                _header(context, detail),
+                _header(context, detail, playable),
                 const SizedBox(height: 30),
                 if (detail == null)
                   Padding(
@@ -169,7 +179,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
                       ),
                     ),
                   ],
-                  if (type == 'tv' && _seasons.isNotEmpty && _episodes.isEmpty && !_busy)
+                  if ((type == 'tv' || type == 'episode') && _seasons.isEmpty && _episodes.isEmpty && !_busy)
                     Padding(
                       padding: EdgeInsets.only(left: contentLeft, top: 8, right: 120),
                       child: Text(l10n.fnosEpisodesEmpty, style: Zt.body.copyWith(color: Zc.textFaint)),
@@ -187,13 +197,13 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     final vote = (map['vote_average'] ?? seed?.voteAverage)?.toString();
     if (vote != null && vote.isNotEmpty && vote != '0') parts.add('★ $vote');
     final seasons = (map['number_of_seasons'] as num?)?.toInt() ?? seed?.numberOfSeasons ?? 0;
-    final episodes = (map['number_of_episodes'] as num?)?.toInt() ?? 0;
+    final episodes = (map['number_of_episodes'] as num?)?.toInt() ?? seed?.numberOfEpisodes ?? 0;
     if (seasons > 1) parts.add(l10n.seasonNumber(seasons));
-    if (episodes > 0) parts.add(l10n.episodeCount(episodes));
+    if (episodes > 0 && seasons > 0) parts.add(l10n.episodeCount(episodes));
     return parts.join('  ·  ');
   }
 
-  Widget _header(BuildContext context, Map<String, Object?>? detail) {
+  Widget _header(BuildContext context, Map<String, Object?>? detail, bool playable) {
     final client = _client;
     final seed = widget.seed;
     final title = detail == null
@@ -201,11 +211,12 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
         : ((detail['type']?.toString() == 'episode' && (detail['tv_title']?.toString().isNotEmpty ?? false))
             ? detail['tv_title']!.toString()
             : detail['title']?.toString() ?? seed?.displayTitle ?? '');
-    final backdrop = detail?['backdrops']?.toString();
-    final poster = (detail?['posters'] ?? seed?.posterPath)?.toString();
+    final backdrop = _s(detail ?? const {}, 'backdrops');
+    final poster = _s(detail ?? const {}, 'posters') ?? seed?.posterPath;
     final watched = detail != null
         ? (detail['watched']?.toString() == '1' || detail['is_watched']?.toString() == '1')
         : (seed?.watched ?? false);
+    final l10n = context.l10n;
     return Stack(
       alignment: Alignment.bottomLeft,
       children: [
@@ -214,10 +225,10 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
           height: 420,
           child: Stack(fit: StackFit.expand, children: [
             NetImage(
-              url: (backdrop == null || backdrop.isEmpty || backdrop == '0') && poster != null && poster.isNotEmpty
-                  ? Uri.parse(client.imageUrl(poster, width: 1200))
-                  : backdrop != null && backdrop.isNotEmpty && backdrop != '0'
-                      ? Uri.parse(client.imageUrl(backdrop, width: 1200))
+              url: backdrop != null
+                  ? Uri.parse(client.imageUrl(backdrop, width: 1200))
+                  : poster != null
+                      ? Uri.parse(client.imageUrl(poster, width: 1200))
                       : null,
               headers: client.imageHeaders,
               fallback: const SizedBox.shrink(),
@@ -236,7 +247,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
         Padding(
           padding: EdgeInsets.only(left: contentLeft, right: 120, bottom: 24),
           child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            if (poster != null && poster.isNotEmpty)
+            if (poster != null)
               SizedBox(
                 width: 150,
                 height: 225,
@@ -249,7 +260,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
                   ),
                 ),
               ),
-            if (poster != null && poster.isNotEmpty) const SizedBox(width: 26),
+            if (poster != null) const SizedBox(width: 26),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
@@ -261,7 +272,19 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
                 ]),
                 if (detail != null) ...[
                   const SizedBox(height: 10),
-                  Text(_meta(context.l10n, detail, seed), style: Zt.caption.copyWith(fontSize: 22, color: Zc.textMuted)),
+                  Text(_meta(l10n, detail, seed), style: Zt.caption.copyWith(fontSize: 22, color: Zc.textMuted)),
+                ],
+                if (playable && detail != null) ...[
+                  const SizedBox(height: 20),
+                  FocusZone(
+                    debugLabel: 'fnos-detail-actions',
+                    child: TvButton(
+                      label: l10n.play,
+                      icon: Icons.play_arrow_rounded,
+                      primary: true,
+                      onSelect: () => unawaited(playFnOs(context, _itemOf(detail))),
+                    ),
+                  ),
                 ],
               ]),
             ),
@@ -278,14 +301,10 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     final e = (episode['episode_number'] as num?)?.toInt() ?? 0;
     final title = episode['title']?.toString() ?? '';
     final current = _guid(episode) == widget.guid;
-    final watched = episode['watched']?.toString() == '1';
-    final poster = episode['poster']?.toString();
+    final watched = episode['watched']?.toString() == '1' || episode['is_watched']?.toString() == '1';
+    final poster = _s(episode, 'poster');
     return TvFocusable(
-      onSelect: () {
-        // Playback arrives with the fnOS player round; for now opening an
-        // episode re-opens its own detail.
-        Navigator.of(context).push(tvRouteItem(episode));
-      },
+      onSelect: () => unawaited(playFnOs(context, _itemOf(episode))),
       builder: (context, focused) => Container(
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(14),
@@ -301,7 +320,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(10),
               child: NetImage(
-                url: poster == null || poster.isEmpty || poster == '0' ? null : Uri.parse(client.imageUrl(poster, width: 300)),
+                url: poster == null ? null : Uri.parse(client.imageUrl(poster, width: 300)),
                 headers: client.imageHeaders,
                 fallback: const SizedBox.shrink(),
               ),
@@ -335,7 +354,4 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
       ),
     );
   }
-
-  Route<void> tvRouteItem(Map<String, Object?> episode) =>
-      tvRoute(FnOsItemPage(guid: _guid(episode), seed: FnOsItem.from(episode)), name: 'fnos:${_guid(episode)}');
 }
