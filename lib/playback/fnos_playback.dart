@@ -42,6 +42,8 @@ final class FnOsPlayback {
   PlayerBackend? _backend;
   StreamSubscription<PlayerEvent>? _eventsSub;
   Timer? _progressTimer;
+  Timer? _loadWatchdog;
+  bool _loaded = false;
   bool _reportedStart = false;
   bool _finishing = false;
   bool _ended = false;
@@ -99,7 +101,7 @@ final class FnOsPlayback {
       final ts = (map['ts'] as num?)?.toInt() ?? 0;
 
       final url = client.directStreamUrl(_mediaGuid);
-      debugPrint('[fnos] play ${item.displayTitle} media=$_mediaGuid start=$ts');
+      debugPrint('[fnos] play ${item.displayTitle} media=$_mediaGuid start=$ts headers=${client.imageHeaders.length}');
       // The web player opens a stream session before serving media/range; do
       // the same so the server has the media registered. Failures are fine —
       // direct play works against FlyNarwhal without it too.
@@ -113,6 +115,20 @@ final class FnOsPlayback {
         start: ts > 0 ? Duration(seconds: ts) : null,
         headers: client.imageHeaders,
       );
+      // mpv errors surface as PlayerLoadError; if nothing happens at all
+      // (command rejected, network silently stuck) fail visibly instead of
+      // spinning forever.
+      _loadWatchdog?.cancel();
+      _loadWatchdog = Timer(const Duration(seconds: 30), () {
+        if (!_loaded && !_finishing) {
+          debugPrint('[fnos] load watchdog fired');
+          backend.osd('state', {
+            'phase': 'error',
+            'title': item.displayTitle,
+            'message': '无法连接飞牛的媒体流（30 秒无响应）',
+          });
+        }
+      });
     } catch (e) {
       debugPrint('[fnos] play failed: $e');
       backend.osd('state', {
@@ -144,6 +160,8 @@ final class FnOsPlayback {
     if (backend == null) return;
     switch (event) {
       case PlayerLoaded():
+        _loaded = true;
+        _loadWatchdog?.cancel();
         final item = _item;
         if (item != null) _osdState('playing', item);
         _report(backend.state.value.position.inSeconds);
@@ -199,6 +217,7 @@ final class FnOsPlayback {
     if (_finishing) return;
     _finishing = true;
     _progressTimer?.cancel();
+    _loadWatchdog?.cancel();
     final backend = _backend;
     final s = backend?.state.value;
     if (!_ended && s != null && s.position > Duration.zero && _reportedStart) {

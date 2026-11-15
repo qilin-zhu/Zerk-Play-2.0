@@ -192,11 +192,14 @@ final class MpvBackend implements PlayerBackend {
       'aid=${audioOrdinal ?? 'auto'}',
       'sid=${subtitleOrdinal ?? 'no'}',
     ];
-    // Per-file option. mpv splits the header list on commas, so header values
-    // must not contain one (fnOS cookies and tokens never do).
+    // Headers must go through the runtime property, not a loadfile per-file
+    // option: unknown per-file options fail the whole loadfile command (no
+    // playback, no error event — just an eternal spinner). mpv splits the
+    // header list on commas, so header values must not contain one (fnOS
+    // cookies and tokens never do).
     final hs = headers;
     if (hs != null && hs.isNotEmpty) {
-      opts.add('http-header-fields=${[for (final e in hs.entries) '${e.key}: ${e.value}'].join(',')}');
+      _mpv.setProperty('http-header-fields', [for (final e in hs.entries) '${e.key}: ${e.value}'].join(','));
     }
     _mpv.command(['loadfile', url.toString(), 'replace', '-1', opts.join(',')]);
   }
