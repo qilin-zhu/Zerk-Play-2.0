@@ -220,7 +220,11 @@ final class DanmakuApi {
       final res = await _get(path);
       if (res.statusCode != 200) return const [];
       final body = jsonDecode(utf8.decode(res.bodyBytes));
-      final raw = body is Map ? body['episodes'] : null;
+      // The episodes live inside `bangumi`, not at the top level — reading only
+      // the top level returns an empty list for every show.
+      if (body is! Map) return const [];
+      final nested = body['bangumi'];
+      final raw = body['episodes'] ?? (nested is Map ? nested['episodes'] : null);
       if (raw is! List) return const [];
       final out = <DanmakuEpisode>[];
       for (final e in raw) {
@@ -239,7 +243,18 @@ final class DanmakuApi {
     }
   }
 
-  Future<List<DanmakuComment>> comments(int episodeId) async {
+  /// A self-hosted aggregator answers the first request with an empty list
+  /// while it fetches from upstream, then has thousands a moment later, so an
+  /// empty answer is worth asking about again.
+  Future<List<DanmakuComment>> comments(int episodeId, {int retries = 2}) async {
+    for (var attempt = 0; ; attempt++) {
+      final list = await _commentsOnce(episodeId);
+      if (list.isNotEmpty || attempt >= retries) return list;
+      await Future<void>.delayed(Duration(milliseconds: 1200 + attempt * 1500));
+    }
+  }
+
+  Future<List<DanmakuComment>> _commentsOnce(int episodeId) async {
     if (base.isEmpty) return const [];
     final path = '/api/v2/comment/$episodeId';
     try {

@@ -518,10 +518,11 @@ open_panel = function(kind)
       { id = "close", label = tr("close") },
     }
     if S.danmaku.count > 0 then
+      -- No `selected`: the label already says hide/show, and a tick on the
+      -- right of an action item reads like a setting rather than a command.
       p.items[#p.items + 1] = {
         id = "toggle",
         label = S.danmaku.visible and tr("danmaku_hide") or tr("danmaku_show"),
-        selected = S.danmaku.visible,
       }
     end
     p.items[#p.items + 1] = { id = "search", label = tr("danmaku_search") }
