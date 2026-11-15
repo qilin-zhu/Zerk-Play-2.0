@@ -16,7 +16,7 @@ import '../widgets/common.dart';
 /// back, so the response shapes are verified before anything is mapped onto the
 /// player.
 class FnosTestPage extends StatefulWidget {
-  const _FnosTestPage();
+  const FnosTestPage();
 
   @override
   State<FnosTestPage> createState() => FnosTestPageState();
