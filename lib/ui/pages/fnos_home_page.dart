@@ -29,6 +29,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   List<FnOsItem> _resume = const [];
   List<FnOsMediaDb>? _libs;
   final _libItems = <String, List<FnOsItem>>{};
+  bool _rowsDone = false;
   String? _error;
   bool _busy = false;
   bool _heroSet = false;
@@ -56,6 +57,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       _error = null;
       _resume = const [];
       _libs = null;
+      _rowsDone = false;
       _libItems.clear();
     });
     try {
@@ -88,11 +90,17 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   }
 
   /// Fills one poster row per library, sequentially so the rows appear one by
-  /// one without hammering the server.
+  /// one without hammering the server. The type filter mirrors FlyNarwhal's
+  /// `libraryBrowseValues`: episodes and seasons stay out of the home rows so
+  /// a TV library lists shows only.
   Future<void> _loadLibraryRows(FnosClient client, List<FnOsMediaDb> libs) async {
     for (final db in libs) {
       try {
-        final data = await client.itemList(ancestorGuid: db.guid, pageSize: 24, page: 1);
+        final data = await client.itemList(
+            ancestorGuid: db.guid,
+            pageSize: 24,
+            page: 1,
+            types: const ['Movie', 'TV', 'Directory', 'Video', 'LiveChannel']);
         final list = data is List ? data : data is Map ? data['list'] as List? ?? const [] : const [];
         final items = [for (final e in list) if (e is Map) FnOsItem.from(e)];
         if (!mounted) return;
@@ -107,6 +115,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
         setState(() => _libItems[db.guid] = const []);
       }
     }
+    if (mounted) setState(() => _rowsDone = true);
   }
 
   String? _s(Map m, String key) {
@@ -216,8 +225,11 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
                           ),
                         ),
                       ),
+                    // A library with no browsable items (e.g. an empty folder
+                    // library) contributes no row at all.
                     for (final db in libs)
-                      SliverToBoxAdapter(child: _libRow(db, firstRow: resume.isEmpty && identical(db, libs.first))),
+                      if (_libItems[db.guid] == null || _libItems[db.guid]!.isNotEmpty)
+                        SliverToBoxAdapter(child: _libRow(db, firstRow: resume.isEmpty && identical(db, libs.first))),
                     const SliverPadding(padding: EdgeInsets.only(bottom: 160)),
                   ],
                 ),
@@ -236,7 +248,10 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
           right: 120,
           child: _message(l10n.fnosLoadFailed(_error!), l10n.tryAgain, _reload),
         )
-      else if (libs != null && libs.isEmpty && resume.isEmpty)
+      else if (_rowsDone &&
+          libs != null &&
+          resume.isEmpty &&
+          !libs.any((db) => _libItems[db.guid] == null || _libItems[db.guid]!.isNotEmpty))
         Positioned(
           left: contentLeft,
           top: heroHeight,
