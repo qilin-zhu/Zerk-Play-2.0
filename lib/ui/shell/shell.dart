@@ -231,6 +231,10 @@ class _ShellState extends State<Shell> {
         ShellTab.shows,
         ShellTab.collections,
         if (s.liveTvAvailable) ShellTab.liveTv,
+        // Settings must be a real tab: the body only renders pages for tabs in
+        // this list and resets unknown tabs back to home, so omitting it made
+        // the rail's settings entry a no-op.
+        ShellTab.settings,
       ];
     }
     return [

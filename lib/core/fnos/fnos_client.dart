@@ -8,10 +8,10 @@ import 'package:http/http.dart' as http;
 ///
 /// The signatures mirror FlyNarwhal's `AuthInterceptor`, which mirrors the
 /// official web client: every request carries an `Authx` header whose sign is
-/// `md5(apiKey_path_nonce_timestamp_dataMd5_apiSecret)`, where `dataMd5` is the
-/// md5 of the exact body that goes out. Both strings were verified against a
-/// live server: a correct sign answers `{"code":0,...}`, a missing one answers
-/// `{"code":5000,"msg":"invalid sign"}`.
+/// `md5(apiKey_path_nonce_timestamp_dataMd5_apiSecret)`, where `dataMd5` is
+/// the md5 of the JSON body for POSTs, the sorted `k=v` query string (raw
+/// values) for GETs with parameters, and of the empty string otherwise. The
+/// signed path never includes the query string.
 ///
 /// Endpoint shapes follow FlyNarwhal (verified against real servers): list-like
 /// reads (mediadb/list, item/{guid}, season/list/{guid}, episode/list/{guid},
@@ -60,37 +60,59 @@ final class FnosClient {
         if (_cookie != null && _cookie!.isNotEmpty) 'Cookie': _cookie!,
       };
 
-  /// `path` is the API path exactly as it appears after the host, because the
-  /// server signs the path as received.
-  String _authx(String path, String dataJson) {
+  /// dataMd5 for the Authx sign. Mirrors FlyNarwhal's `_buildDataJsonMd5`:
+  /// POSTs hash the JSON body, GETs hash the sorted `k=v` parameter string
+  /// with **raw (unencoded) values**, and no parameters at all hash the empty
+  /// string. The query string itself is never part of the signed path — the
+  /// server rejects that with `{code: 5000, invalid sign}`.
+  String _dataMd5(Map<String, Object?>? body, Map<String, String>? query) {
+    if (body != null) return md5.convert(utf8.encode(jsonEncode(body))).toString();
+    if (query != null && query.isNotEmpty) {
+      final sorted = query.entries.where((e) => e.value.isNotEmpty).toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      final params = [for (final e in sorted) '${e.key}=${e.value}'].join('&');
+      return md5.convert(utf8.encode(params)).toString();
+    }
+    return md5.convert(utf8.encode('')).toString();
+  }
+
+  /// `path` is the bare API path (no query string); the server signs the path
+  /// as received, and query parameters only enter the sign through [_dataMd5].
+  String _authx(String path, String dataMd5) {
     final nonce = 100000 + Random.secure().nextInt(900000);
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final dataMd5 = md5.convert(utf8.encode(dataJson)).toString();
     final source = [apiKey, path, '$nonce', '$timestamp', dataMd5, apiSecret].join('_');
     final sign = md5.convert(utf8.encode(source)).toString();
     return 'nonce=$nonce&timestamp=$timestamp&sign=$sign';
   }
 
-  Map<String, String> _headers(String path, String dataJson) => {
+  Map<String, String> _headers(String path, String dataMd5) => {
         'Accept': 'application/json',
         'User-Agent': _userAgent,
         'x-trim-client': _trimClient,
         'x-trim-client-version': _trimClientVersion,
-        'Authx': _authx(path, dataJson),
+        'Authx': _authx(path, dataMd5),
         if (_token != null && _token!.isNotEmpty) 'Authorization': _token!,
         if (_cookie != null && _cookie!.isNotEmpty) 'Cookie': _cookie!,
       };
 
   /// `{code: 0, msg, data}` on success; anything else throws [FnosException].
-  Future<Object?> _call(String method, String path, {Map<String, Object?>? body}) async {
-    final dataJson = body == null ? '' : jsonEncode(body);
-    final uri = Uri.parse('$base$path');
+  Future<Object?> _call(String method, String path,
+      {Map<String, Object?>? body, Map<String, String>? query}) async {
+    final dataMd5 = _dataMd5(body, query);
+    var uri = Uri.parse('$base$path');
+    if (query != null && query.isNotEmpty) {
+      uri = uri.replace(queryParameters: {
+        for (final e in query.entries)
+          if (e.value.isNotEmpty) e.key: e.value,
+      });
+    }
     final request = http.Request(method, uri)
-      ..headers.addAll(_headers(path, dataJson))
+      ..headers.addAll(_headers(path, dataMd5))
       ..followRedirects = false;
     if (body != null) {
       request.headers['Content-Type'] = 'application/json';
-      request.bodyBytes = utf8.encode(dataJson);
+      request.bodyBytes = utf8.encode(jsonEncode(body));
     }
     final response = await _client.send(request).timeout(const Duration(seconds: 20));
     final text = await response.stream.bytesToString();
@@ -111,17 +133,8 @@ final class FnosClient {
     return decoded['data'];
   }
 
-  Future<Object?> get(String path, {Map<String, String>? query}) async {
-    var effective = path;
-    if (query != null && query.isNotEmpty) {
-      final sorted = query.entries.where((e) => e.value.isNotEmpty).toList()
-        ..sort((a, b) => a.key.compareTo(b.key));
-      effective = '$path?${[
-        for (final e in sorted) '${e.key}=${Uri.encodeQueryComponent(e.value)}',
-      ].join('&')}';
-    }
-    return _call('GET', effective);
-  }
+  Future<Object?> get(String path, {Map<String, String>? query}) =>
+      _call('GET', path, query: query);
 
   Future<Object?> post(String path, {Map<String, Object?>? body}) => _call('POST', path, body: body);
 
@@ -202,9 +215,10 @@ final class FnosClient {
   /// subtitle streams plus files, used for the media info section.
   Future<Object?> streamList(String guid) => get('/v/api/v1/stream/list/$guid');
 
-  /// GET /v/api/v1/search/list?q={keyword}
-  Future<Object?> search(String keyword, {int pageSize = 30, int page = 1}) =>
-      get('/v/api/v1/search/list', query: {'q': keyword, 'page_size': '$pageSize', 'page': '$page'});
+  /// GET /v/api/v1/search/list?q={keyword} — the verified shape (FlyNarwhal)
+  /// sends only the keyword; paging parameters are not part of this endpoint.
+  Future<Object?> search(String keyword) =>
+      get('/v/api/v1/search/list', query: {'q': keyword});
 
   /// Favorited items (POST /v/api/v1/favorite/list, same query as item/list).
   Future<Object?> favoriteList({

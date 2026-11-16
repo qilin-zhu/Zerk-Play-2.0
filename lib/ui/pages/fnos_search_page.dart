@@ -72,7 +72,7 @@ class _FnOsSearchPageState extends State<FnOsSearchPage> {
       _error = null;
     });
     try {
-      final raw = await _client.search(q, pageSize: 60);
+      final raw = await _client.search(q);
       final list = raw is List ? raw : raw is Map ? raw['list'] as List? ?? const [] : const [];
       if (!mounted) return;
       setState(() {
