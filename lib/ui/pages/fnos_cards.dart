@@ -17,11 +17,12 @@ import 'fnos_item_page.dart';
 
 /// Shared poster card for all fnOS pages (home wall, libraries, search).
 class FnOsPosterCard extends StatelessWidget {
-  const FnOsPosterCard({super.key, required this.item, this.width, this.onFocus, this.autofocus = false});
+  const FnOsPosterCard({super.key, required this.item, this.width, this.onFocus, this.onFocusOut, this.autofocus = false});
 
   final FnOsItem item;
   final double? width;
   final VoidCallback? onFocus;
+  final VoidCallback? onFocusOut;
   final bool autofocus;
 
   @override
@@ -32,7 +33,13 @@ class FnOsPosterCard extends StatelessWidget {
     final height = w * 1.5;
     return TvFocusable(
       autofocus: autofocus,
-      onFocusChange: (f) => f ? onFocus?.call() : null,
+      onFocusChange: (f) {
+        if (f) {
+          onFocus?.call();
+        } else {
+          onFocusOut?.call();
+        }
+      },
       onSelect: () => Navigator.of(context).push(
         tvRoute(FnOsItemPage(guid: item.guid, seed: item), name: 'fnos:${item.guid}'),
       ),
@@ -81,11 +88,12 @@ class FnOsPosterCard extends StatelessWidget {
 /// Continue-watching card: landscape still with a progress strip. Tapping
 /// plays immediately.
 class FnOsResumeCard extends StatelessWidget {
-  const FnOsResumeCard({super.key, required this.item, required this.width, this.onFocus});
+  const FnOsResumeCard({super.key, required this.item, required this.width, this.onFocus, this.onFocusOut});
 
   final FnOsItem item;
   final double width;
   final VoidCallback? onFocus;
+  final VoidCallback? onFocusOut;
 
   @override
   Widget build(BuildContext context) {
@@ -94,7 +102,13 @@ class FnOsResumeCard extends StatelessWidget {
     final imageH = width * 0.5625;
     final l10n = context.l10n;
     return TvFocusable(
-      onFocusChange: (f) => f ? onFocus?.call() : null,
+      onFocusChange: (f) {
+        if (f) {
+          onFocus?.call();
+        } else {
+          onFocusOut?.call();
+        }
+      },
       onSelect: () => unawaited(playFnOs(context, item)),
       builder: (context, focused) => SizedBox(
         width: width,
