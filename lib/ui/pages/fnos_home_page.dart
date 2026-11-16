@@ -13,10 +13,11 @@ import '../widgets/common.dart';
 import '../widgets/media_row.dart';
 import 'hero.dart' show HeroInfo, HeroPanel, formatRuntime;
 import 'fnos_cards.dart';
+import 'fnos_collections_page.dart' show FnOsMediaDb;
 
-/// Landing page for 飞牛影视 (fnOS trimemedia) sessions: hero backdrop panel
-/// on top (updates as focus moves), continue-watching row from play/list and a
-/// poster wall of everything else.
+/// Landing page for 飞牛影视 (fnOS trimemedia) sessions, matching the fnOS web
+/// home: hero backdrop panel on top, continue-watching as the first row, then
+/// one poster row per media library (mediadb/list), each filled progressively.
 class FnOsHomePage extends StatefulWidget {
   const FnOsHomePage({super.key});
 
@@ -25,8 +26,9 @@ class FnOsHomePage extends StatefulWidget {
 }
 
 class _FnOsHomePageState extends State<FnOsHomePage> {
-  List<FnOsItem>? _items;
   List<FnOsItem> _resume = const [];
+  List<FnOsMediaDb>? _libs;
+  final _libItems = <String, List<FnOsItem>>{};
   String? _error;
   bool _busy = false;
   bool _heroSet = false;
@@ -52,18 +54,12 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     setState(() {
       _busy = true;
       _error = null;
+      _resume = const [];
+      _libs = null;
+      _libItems.clear();
     });
     try {
       final client = _client;
-      final items = <FnOsItem>[];
-      for (var page = 1; page <= 6; page++) {
-        final data = await client.itemList(pageSize: 60, page: page);
-        final list = data is List ? data : data is Map ? data['list'] as List? ?? const [] : const [];
-        if (list.isEmpty) break;
-        items.addAll([for (final e in list) if (e is Map) FnOsItem.from(e)]);
-        final total = data is Map ? (data['total'] as num?)?.toInt() ?? 0 : 0;
-        if (items.length >= total) break;
-      }
       final resume = <FnOsItem>[];
       try {
         final played = await client.playList();
@@ -73,22 +69,43 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       } catch (e) {
         debugPrint('[fnos] play/list: $e');
       }
+      final dbsRaw = await client.mediaDbList();
+      final libs = [for (final e in (dbsRaw is List ? dbsRaw : const [])) if (e is Map) FnOsMediaDb.from(e)];
       if (!mounted) return;
       setState(() {
-        _items = items;
         _resume = [for (final r in resume) if (r.isResumable) r];
+        _libs = libs;
         _busy = false;
       });
-      if (!_heroSet && items.isNotEmpty) {
-        _heroSet = true;
-        _focusFnos(items.first, immediate: true);
-      }
+      _loadLibraryRows(client, libs);
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = '$e';
         _busy = false;
       });
+    }
+  }
+
+  /// Fills one poster row per library, sequentially so the rows appear one by
+  /// one without hammering the server.
+  Future<void> _loadLibraryRows(FnosClient client, List<FnOsMediaDb> libs) async {
+    for (final db in libs) {
+      try {
+        final data = await client.itemList(ancestorGuid: db.guid, pageSize: 24, page: 1);
+        final list = data is List ? data : data is Map ? data['list'] as List? ?? const [] : const [];
+        final items = [for (final e in list) if (e is Map) FnOsItem.from(e)];
+        if (!mounted) return;
+        setState(() => _libItems[db.guid] = items);
+        if (!_heroSet && items.isNotEmpty) {
+          _heroSet = true;
+          _focusFnos(items.first, immediate: true);
+        }
+      } catch (e) {
+        debugPrint('[fnos] home row ${db.title}: $e');
+        if (!mounted) return;
+        setState(() => _libItems[db.guid] = const []);
+      }
     }
   }
 
@@ -155,12 +172,10 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    final items = _items;
-    final columns = AppServicesScope.of(context).settings.posterSize.columns;
-    final cardW = posterGridCardWidth(MediaQuery.sizeOf(context).width, columns);
+    final libs = _libs;
+    final resume = _resume;
     final height = MediaQuery.sizeOf(context).height;
     final heroHeight = height * 0.44;
-    final resume = _resume;
     return Stack(children: [
       Positioned.fill(
         child: ValueListenableBuilder(
@@ -183,45 +198,36 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       ),
       Positioned.fill(
         top: heroHeight,
-        child: FocusZone(
-          debugLabel: 'fnos-content',
-          child: CustomScrollView(
-            slivers: [
-              if (resume.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: MediaRow(
-                    title: l10n.continueWatching,
-                    height: Zs.landscapeWidth * 0.5625 + 76,
-                    itemCount: resume.length,
-                    itemBuilder: (context, i) => FnOsResumeCard(
-                      item: resume[i],
-                      width: Zs.landscapeWidth,
-                      onFocus: () => _focusFnos(resume[i]),
-                    ),
-                  ),
+        child: libs != null
+            ? FocusZone(
+                debugLabel: 'fnos-content',
+                child: CustomScrollView(
+                  slivers: [
+                    if (resume.isNotEmpty)
+                      SliverToBoxAdapter(
+                        child: MediaRow(
+                          title: l10n.continueWatching,
+                          height: Zs.landscapeWidth * 0.5625 + 76,
+                          itemCount: resume.length,
+                          itemBuilder: (context, i) => FnOsResumeCard(
+                            item: resume[i],
+                            width: Zs.landscapeWidth,
+                            onFocus: () => _focusFnos(resume[i]),
+                          ),
+                        ),
+                      ),
+                    for (final db in libs)
+                      SliverToBoxAdapter(child: _libRow(db, firstRow: resume.isEmpty && identical(db, libs.first))),
+                    const SliverPadding(padding: EdgeInsets.only(bottom: 160)),
+                  ],
                 ),
-              SliverPadding(
-                padding: EdgeInsets.fromLTRB(contentLeft, resume.isEmpty ? 16 : 0, 120, 160),
-                sliver: SliverGrid(
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: columns,
-                    mainAxisSpacing: 26,
-                    crossAxisSpacing: Zs.cardGap,
-                    childAspectRatio: cardW / (cardW * 1.5 + 70),
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, i) {
-                      if (items == null) return SkeletonBox(width: cardW, height: cardW * 1.5);
-                      final data = items[i];
-                      return FnOsPosterCard(item: data, width: cardW, onFocus: () => _focusFnos(data), autofocus: i == 0 && resume.isEmpty);
-                    },
-                    childCount: items?.length ?? 14,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+              )
+            : (_error == null
+                ? const Padding(
+                    padding: EdgeInsets.only(left: contentLeft, top: 30),
+                    child: SizedBox(width: 40, height: 40, child: CircularProgressIndicator(strokeWidth: 3)),
+                  )
+                : const SizedBox.shrink()),
       ),
       if (_error != null)
         Positioned(
@@ -230,7 +236,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
           right: 120,
           child: _message(l10n.fnosLoadFailed(_error!), l10n.tryAgain, _reload),
         )
-      else if (items != null && items.isEmpty)
+      else if (libs != null && libs.isEmpty && resume.isEmpty)
         Positioned(
           left: contentLeft,
           top: heroHeight,
@@ -238,6 +244,27 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
           child: _message(l10n.fnosEmpty, l10n.tryAgain, _reload),
         ),
     ]);
+  }
+
+  Widget _libRow(FnOsMediaDb db, {required bool firstRow}) {
+    const w = Zs.posterWidth;
+    final items = _libItems[db.guid];
+    return MediaRow(
+      title: db.title,
+      height: w * 1.5 + 90,
+      itemCount: items == null ? 8 : items.length,
+      itemBuilder: (context, i) => Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: items == null
+            ? SkeletonBox(width: w, height: w * 1.5)
+            : FnOsPosterCard(
+                item: items[i],
+                width: w,
+                onFocus: () => _focusFnos(items[i]),
+                autofocus: firstRow && i == 0,
+              ),
+      ),
+    );
   }
 
   Widget _message(String text, String action, VoidCallback onSelect) => Column(
