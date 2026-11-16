@@ -19,10 +19,10 @@ import 'fnos_cards.dart';
 import 'fnos_collections_page.dart' show FnOsMediaDb;
 
 /// Landing page for 飞牛影视 (fnOS trimemedia) sessions, matching the fnOS web
-/// home: a full-width hero carousel of random resources (auto-advancing, with
-/// prev/next buttons and indicator dots) that blurs away from the bottom as
-/// the view scrolls, then the continue-watching row and one poster row per
-/// media library.
+/// home: a pinned full-width hero carousel of random resources that initially
+/// shows the entire 16:9 backdrop; its height shrinks (with progressive blur)
+/// by the scroll offset until it is fully gone, then the continue-watching
+/// row and one poster row per media library follow.
 class FnOsHomePage extends StatefulWidget {
   const FnOsHomePage({super.key});
 
@@ -48,9 +48,8 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   Timer? _autoTimer;
   String? _focusedGuid;
   bool _carouselHold = false;
-  double _scrollOffset = 0;
-  double _heroH = 1;
-  final _collapse = ValueNotifier(0.0);
+  final _scrollOffset = ValueNotifier(0.0);
+  double _fullH = 1;
   final _hero = Debounced<HeroInfo?>(null);
   final _details = <String, Map<String, Object?>>{};
 
@@ -66,7 +65,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   @override
   void dispose() {
     _autoTimer?.cancel();
-    _collapse.dispose();
+    _scrollOffset.dispose();
     _hero.dispose();
     super.dispose();
   }
@@ -176,7 +175,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
 
   void _autoAdvance() {
     if (!mounted || _focusedGuid != null || _carouselHold || _slides == null || _slides!.length < 2) return;
-    if (_scrollOffset > _heroH * 0.5) return;
+    if (_scrollOffset.value > _fullH * 0.3) return;
     setState(() => _slideIndex = (_slideIndex + 1) % _slides!.length);
     _showSlide();
   }
@@ -279,22 +278,25 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     final l10n = context.l10n;
     final libs = _libs;
     final resume = _resume;
-    final height = MediaQuery.sizeOf(context).height;
-    _heroH = height * 0.44;
+    final width = MediaQuery.sizeOf(context).width;
+    _fullH = width * 9 / 16;
     return Stack(children: [
+      // Rows scroll under the collapsing hero: the content starts one full
+      // backdrop-height down, so the first row always sits right below the
+      // hero's shrinking bottom edge.
       Positioned.fill(
         child: FocusZone(
           debugLabel: 'fnos-content',
           child: NotificationListener<ScrollNotification>(
             onNotification: (n) {
-              _scrollOffset = n.metrics.pixels;
-              final c = (_scrollOffset / (_heroH * 0.85)).clamp(0.0, 1.0);
-              if ((_collapse.value - c).abs() > 0.004) _collapse.value = c;
+              if ((_scrollOffset.value - n.metrics.pixels).abs() > 0.5) {
+                _scrollOffset.value = n.metrics.pixels;
+              }
               return false;
             },
             child: CustomScrollView(
               slivers: [
-                SliverToBoxAdapter(child: _heroSection(_heroH)),
+                SliverPadding(padding: EdgeInsets.only(bottom: _fullH)),
                 if (resume.isNotEmpty)
                   SliverToBoxAdapter(
                     child: MediaRow(
@@ -318,6 +320,21 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
               ],
             ),
           ),
+        ),
+      ),
+      // Pinned hero: full 16:9 backdrop height at rest, shrinking 1:1 with the
+      // scroll offset, blurred progressively, gone completely at fullH.
+      Positioned(
+        left: 0,
+        right: 0,
+        top: 0,
+        child: ValueListenableBuilder(
+          valueListenable: _scrollOffset,
+          builder: (context, offset, _) {
+            final h = (_fullH - offset).clamp(0.0, _fullH);
+            if (h <= 0) return const SizedBox.shrink();
+            return _heroSection(h, offset / _fullH);
+          },
         ),
       ),
       if (_busy && libs == null)
@@ -346,76 +363,72 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     ]);
   }
 
-  Widget _heroSection(double h) {
+  /// `h` is the current (shrinking) hero height, `c` the collapse progress
+  /// 0..1. The backdrop is laid out at the FULL height and top-anchored, so
+  /// the section crops it from the bottom as it shrinks.
+  Widget _heroSection(double h, double c) {
     return SizedBox(
       height: h,
       child: ClipRect(
         child: Stack(fit: StackFit.expand, children: [
-          // Backdrop: parallaxes against the scroll and blurs progressively
-          // until the section has scrolled away.
-          ValueListenableBuilder(
-            valueListenable: _collapse,
-            builder: (context, c, _) {
-              final drift = (c * h * 0.5).clamp(0.0, h * 0.5);
-              return Positioned(
-                left: 0,
-                right: 0,
-                top: -h * 0.5,
-                height: h * 1.5,
-                child: ImageFiltered(
-                  enabled: c > 0.02,
-                  imageFilter: ImageFilter.blur(sigmaX: 10 * c, sigmaY: 10 * c),
-                  child: Transform.translate(
-                    offset: Offset(0, drift),
-                    child: ValueListenableBuilder(
-                      valueListenable: _hero,
-                      builder: (_, info, _) => Backdrop(url: info?.backdrop, headers: _client.imageHeaders),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-          // Info panel (logo/title, meta, overview).
-          Positioned(
-            left: contentLeft,
-            right: 560,
-            bottom: 40,
-            child: ValueListenableBuilder(valueListenable: _hero, builder: (_, info, _) => HeroPanel(info: info)),
-          ),
-          // Prev/next arrows.
-          Positioned(
-            left: 16,
-            top: h * 0.42,
-            child: _HeroArrow(icon: Icons.chevron_left_rounded, onSelect: () => _stepSlide(-1), onHold: _setHold),
-          ),
-          Positioned(
-            right: 16,
-            top: h * 0.42,
-            child: _HeroArrow(icon: Icons.chevron_right_rounded, onSelect: () => _stepSlide(1), onHold: _setHold),
-          ),
-          // Indicator dots.
           Positioned(
             left: 0,
             right: 0,
-            bottom: 14,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                for (final (i, _) in (_slides ?? const <FnOsItem>[]).indexed)
-                  AnimatedContainer(
-                    duration: Zm.fast,
-                    width: i == _slideIndex % (_slides?.length ?? 1) ? 30 : 12,
-                    height: 4,
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    decoration: BoxDecoration(
-                      color: i == _slideIndex % (_slides?.length ?? 1) ? Colors.white : Colors.white.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-              ],
+            top: 0,
+            height: _fullH,
+            child: ImageFiltered(
+              enabled: c > 0.02,
+              imageFilter: ImageFilter.blur(sigmaX: 8 * c, sigmaY: 8 * c),
+              child: ValueListenableBuilder(
+                valueListenable: _hero,
+                builder: (_, info, _) => Backdrop(url: info?.backdrop, headers: _client.imageHeaders),
+              ),
             ),
           ),
+          if (c < 0.6) ...[
+            Opacity(
+              opacity: (1 - c / 0.6).clamp(0.0, 1.0),
+              child: Stack(fit: StackFit.expand, children: [
+                Positioned(
+                  left: contentLeft,
+                  right: 560,
+                  bottom: 40,
+                  child: ValueListenableBuilder(valueListenable: _hero, builder: (_, info, _) => HeroPanel(info: info)),
+                ),
+                Positioned(
+                  left: 16,
+                  top: h * 0.42,
+                  child: _HeroArrow(icon: Icons.chevron_left_rounded, onSelect: () => _stepSlide(-1), onHold: _setHold),
+                ),
+                Positioned(
+                  right: 16,
+                  top: h * 0.42,
+                  child: _HeroArrow(icon: Icons.chevron_right_rounded, onSelect: () => _stepSlide(1), onHold: _setHold),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 14,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      for (final (i, _) in (_slides ?? const <FnOsItem>[]).indexed)
+                        AnimatedContainer(
+                          duration: Zm.fast,
+                          width: i == _slideIndex % (_slides?.length ?? 1) ? 30 : 12,
+                          height: 4,
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                          decoration: BoxDecoration(
+                            color: i == _slideIndex % (_slides?.length ?? 1) ? Colors.white : Colors.white.withValues(alpha: 0.35),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ]),
+            ),
+          ],
         ]),
       ),
     );
