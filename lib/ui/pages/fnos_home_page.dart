@@ -106,19 +106,32 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   FnosClient? _headersOwner;
   Map<String, String> _headers = const {};
 
-  /// Hero interaction: the whole poster is a single focusable button that opens
-  /// the resource currently shown, and the two arrows are their own nodes.
+  /// Hero interaction: one focusable anchor (keyboard) plus a pointer layer
+  /// (click opens the shown resource). The arrows are mouse-only, so they have
+  /// no focus nodes at all.
   final _heroNode = FocusNode(debugLabel: 'fnos-hero');
-  final _prevNode = FocusNode(debugLabel: 'fnos-hero-prev');
-  final _nextNode = FocusNode(debugLabel: 'fnos-hero-next');
 
-  /// True while the D-pad (not the mouse) is somewhere on the hero, which holds
-  /// the carousel so the slide cannot change right before OK is pressed.
-  bool get _heroHolding => _heroNode.hasFocus || _prevNode.hasFocus || _nextNode.hasFocus;
+  /// True while the D-pad is on the hero, which holds the carousel so the slide
+  /// cannot change right before OK is pressed.
+  bool get _heroHolding => _heroNode.hasFocus;
 
-  /// Painter of the focus frame around the info card (the poster itself is
-  /// edge to edge, so the frame belongs on the text block, not on the artwork).
+  /// Keyboard focus on the poster: only the plate behind the info text changes.
   final _heroFocus = ValueNotifier<bool>(false);
+
+  /// Mouse over the poster: reveals the carousel arrows.
+  final _heroHover = ValueNotifier<bool>(false);
+
+  /// Arrows are visible while the hero is focused by the D-pad or hovered.
+  late final Listenable _arrows = Listenable.merge([_heroFocus, _heroHover]);
+
+  /// Height of the invisible focus anchor pinned to the top of the page. The
+  /// anchor is always mounted, even when the poster has been scrolled away, so
+  /// Up from a row always has a target to return to.
+  static const _heroFocusH = 44.0;
+
+  /// Left edge of the arrows: just right of the collapsed rail, which keeps them
+  /// clear of the info card (`contentLeft`).
+  static const _arrowLeft = 88.0;
 
   FnosClient get _client => AppServicesScope.read(context).janus.fnos!;
 
@@ -133,7 +146,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   @override
   void initState() {
     super.initState();
-    AppLog.write('[fnos] home build hero-v6 (page-scroll-only, rows filtered out)');
+    AppLog.write('[fnos] home build hero-v8 (plate focus, hover arrows, hero anchor, up-fallback)');
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
     _autoTimer = Timer.periodic(_slideInterval, (_) => _autoAdvance());
   }
@@ -146,9 +159,8 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     _heroImage.dispose();
     _hero.dispose();
     _heroNode.dispose();
-    _prevNode.dispose();
-    _nextNode.dispose();
     _heroFocus.dispose();
+    _heroHover.dispose();
     super.dispose();
   }
 
@@ -419,7 +431,14 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       builder: (_, info, _) => HeroPanel(info: info),
     );
 
-    return Stack(children: [
+    // `_pageKeys` is the safety net for Up: directional traversal refuses to
+    // pick the hero when a row hangs off the top edge, and then the page would
+    // neither scroll nor select the poster.
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _pageKeys,
+      child: Stack(children: [
       // Poster layer (bottom): pinned and full-bleed, cropped from the bottom as
       // the page scrolls.
       Positioned(
@@ -490,51 +509,48 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
                   const SliverToBoxAdapter(child: SizedBox(height: 160)),
                 ],
               ),
-              // The poster itself is a button (opens the shown resource) and the
-              // carousel arrows float above it. They live in the top layer so
-              // the rows still paint over the poster's bottom edge.
+              // The poster is clickable and the carousel arrows float above it.
+              // They live in the top layer so the rows still paint over the
+              // poster's bottom edge. The keyboard anchor is a separate, always
+              // mounted widget: the clickable area disappears once the poster
+              // scrolls away, and losing the only focus node of this zone made
+              // Up from a row a no-op.
               ValueListenableBuilder<double>(
                 valueListenable: _scrollOffset,
                 builder: (context, offset, _) {
                   final h = (fullH - offset).clamp(0.0, fullH);
                   final c = (offset / fullH).clamp(0.0, 1.0);
-                  if (h <= 0.5 || c >= 0.6) return const SizedBox.shrink();
-                  // The poster button stops where the first row begins, so it
-                  // never swallows clicks meant for the cards above it.
+                  // The pointer layer stops where the first row begins, so it
+                  // never swallows clicks meant for the cards below.
                   final hitH = (_rowTop - offset).clamp(0.0, h);
-                  // Arrows sit at ~40% of the poster, but never on top of the
-                  // info card in the bottom-left corner.
+                  final arrowsOn = h > 120 && c < 0.6;
                   final panelBottom = h - _overlap - 22;
-                  final arrowTop = min(h * 0.40, panelBottom - 175);
+                  final arrowTop = min(h * 0.40, panelBottom - 175).clamp(16.0, max(16.0, h - 52)).toDouble();
                   return Stack(children: [
                     if (hitH > 24)
-                      Positioned(left: 0, top: 0, right: 0, height: hitH, child: _heroButton()),
-                    Positioned(
-                      left: contentLeft,
-                      right: 16,
-                      top: arrowTop.clamp(16.0, max(16.0, h - 52)),
-                      height: 52,
-                      child: Opacity(
-                        opacity: (1 - c / 0.6).clamp(0.0, 1.0),
-                        child: FocusZone(
-                          debugLabel: 'fnos-hero-arrows',
-                          child: Row(children: [
-                            _HeroArrow(
-                              node: _prevNode,
-                              icon: Icons.chevron_left_rounded,
-                              onSelect: () => _stepSlide(-1),
-                              onStep: _stepSlide,
-                            ),
-                            const Spacer(),
-                            _HeroArrow(
-                              node: _nextNode,
-                              icon: Icons.chevron_right_rounded,
-                              onSelect: () => _stepSlide(1),
-                              onStep: _stepSlide,
-                            ),
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        right: 0,
+                        height: max(hitH, arrowsOn ? arrowTop + 52 : 0.0),
+                        child: MouseRegion(
+                          onEnter: (_) => _heroHover.value = true,
+                          onExit: (_) => _heroHover.value = false,
+                          child: Stack(children: [
+                            Positioned(left: 0, top: 0, right: 0, height: hitH, child: _heroPointer()),
+                            if (arrowsOn) ..._arrowLayer(arrowTop),
                           ]),
                         ),
                       ),
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      right: 0,
+                      // When the poster is on screen this covers it, so Down
+                      // still reaches the first row; once it is scrolled away a
+                      // thin strip at the top remains for Up to land on.
+                      height: max(hitH, _heroFocusH),
+                      child: _heroFocusTarget(),
                     ),
                   ]);
                 },
@@ -566,25 +582,53 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
           right: 120,
           child: _message(l10n.fnosEmpty, l10n.tryAgain, _reload),
         ),
-    ]);
+      ]),
+    );
   }
 
-  /// The whole poster is one button: a mouse click or OK on the D-pad opens the
-  /// resource currently shown. A ring marks the focus so it is obvious that the
-  /// poster can be selected.
-  Widget _heroButton() {
-    return FocusZone(
-      debugLabel: 'fnos-hero',
-      child: GestureDetector(
-        // The scroll view is a sibling underneath, so a drag on the artwork has
-        // to scroll the page itself (the wheel is handled by the page listener).
-        onVerticalDragUpdate: (d) {
-          if (!_scroll.hasClients) return;
-          final p = _scroll.position;
-          _scroll.jumpTo((p.pixels - d.delta.dy).clamp(0.0, p.maxScrollExtent));
-        },
+  /// Up must always be able to come back to the poster. Directional traversal
+  /// scores the row zone against the hero anchor, so a row hanging off the top
+  /// edge can leave the hero unreachable (nothing above it, so the key did
+  /// nothing: neither the page scrolled nor the poster got selected). When the
+  /// normal move finds no target, focus the hero directly and let
+  /// [_scrollToPoster] bring the page back.
+  KeyEventResult _pageKeys(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.arrowUp) {
+      return KeyEventResult.ignored;
+    }
+    if (_heroHolding) return KeyEventResult.ignored;
+    if (ZoneNavigator.move(TraversalDirection.up)) return KeyEventResult.handled;
+    if (!_heroNode.canRequestFocus) return KeyEventResult.ignored;
+    _heroNode.requestFocus();
+    return KeyEventResult.handled;
+  }
+
+  /// Mouse-only layer over the poster: a click opens the shown resource and a
+  /// drag scrolls the page (the scroll view is a sibling underneath, so it
+  /// cannot see the gesture itself).
+  Widget _heroPointer() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _openSlide,
+      onVerticalDragUpdate: (d) {
+        if (!_scroll.hasClients) return;
+        final p = _scroll.position;
+        _scroll.jumpTo((p.pixels - d.delta.dy).clamp(0.0, p.maxScrollExtent));
+      },
+      child: const SizedBox.expand(),
+    );
+  }
+
+  /// Keyboard target of the hero. It is always mounted (see the caller), which
+  /// is what lets Up from a row return to the poster at any scroll offset.
+  /// Pointer events are ignored so it never steals a click from the cards.
+  Widget _heroFocusTarget() {
+    return IgnorePointer(
+      child: FocusZone(
+        debugLabel: 'fnos-hero',
         child: TvFocusable(
           focusNode: _heroNode,
+          reveal: false,
           onSelect: _openSlide,
           onFocusChange: (f) {
             _heroFocus.value = f;
@@ -593,29 +637,67 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
             if (f && !InputMode.isPointer) _scrollToPoster();
           },
           onKey: (event) {
-            if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowDown) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+            final key = event.logicalKey;
+            if (key == LogicalKeyboardKey.arrowDown) {
               _leaveHeroDown();
+              return KeyEventResult.handled;
+            }
+            // Left/Right switch slides while the poster holds the focus; the
+            // arrows themselves are mouse-only now.
+            if (key == LogicalKeyboardKey.arrowLeft) {
+              _stepSlide(-1);
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.arrowRight) {
+              _stepSlide(1);
               return KeyEventResult.handled;
             }
             return KeyEventResult.ignored;
           },
-          // The focus frame is drawn around the info card (see _heroPoster), so
-          // the poster itself paints nothing.
+          // The focus frame is gone: the plate behind the info text (see
+          // [_heroPoster]) is the only focus indicator.
           builder: (context, focused) => const SizedBox.expand(),
         ),
       ),
     );
   }
 
-  /// Down from the poster must reach the first row. The arrows overlap the
-  /// poster's rect, so the first step can land on one of them instead.
-  void _leaveHeroDown() {
-    ZoneNavigator.move(TraversalDirection.down);
-    final focus = FocusManager.instance.primaryFocus;
-    if (identical(focus, _prevNode) || identical(focus, _nextNode)) {
-      ZoneNavigator.move(TraversalDirection.down);
-    }
+  /// Prev/next circles. They only exist for the mouse: no focus node, no zone,
+  /// and hidden until the hero is hovered or selected with the D-pad.
+  List<Widget> _arrowLayer(double top) {
+    return [
+      Positioned(
+        left: _arrowLeft,
+        right: 16,
+        top: top,
+        height: 52,
+        child: AnimatedBuilder(
+          animation: _arrows,
+          builder: (context, child) {
+            final on = _heroFocus.value || _heroHover.value;
+            return IgnorePointer(
+              ignoring: !on,
+              child: AnimatedOpacity(
+                opacity: on ? 1 : 0,
+                duration: Zm.fast,
+                curve: Zm.curve,
+                child: child,
+              ),
+            );
+          },
+          child: Row(children: [
+            _HeroArrow(icon: Icons.chevron_left_rounded, onTap: () => _stepSlide(-1)),
+            const Spacer(),
+            _HeroArrow(icon: Icons.chevron_right_rounded, onTap: () => _stepSlide(1)),
+          ]),
+        ),
+      ),
+    ];
   }
+
+  /// Down from the poster must reach the first row.
+  void _leaveHeroDown() => ZoneNavigator.move(TraversalDirection.down);
 
   /// Brings the pinned poster back to its resting size when the D-pad lands on
   /// it, since it lives outside the scroll view and `revealFocused` cannot.
@@ -647,7 +729,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
           ),
           // Info overlaid on the poster's bottom-left, above the overlapping row.
           // `contentLeft` keeps it aligned with the row titles and cards; the
-          // focus frame is drawn on this text card, not around the whole poster.
+          // focus indicator is the plate behind this text, not a ring.
           Positioned(
             left: contentLeft - 20,
             right: 220,
@@ -664,9 +746,10 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
                       curve: Zm.curve,
                       padding: const EdgeInsets.fromLTRB(20, 14, 24, 10),
                       decoration: BoxDecoration(
-                        color: focused ? const Color(0x47000000) : Colors.transparent,
+                        // No ring at all: the focus indicator is the translucent
+                        // plate behind the text.
+                        color: focused ? const Color(0x59000000) : Colors.transparent,
                         borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: focused ? Colors.white : Colors.transparent, width: 2.5),
                       ),
                       child: child,
                     ),
@@ -736,45 +819,29 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       );
 }
 
-/// Circular prev/next control of the hero carousel. Left/Right on the D-pad
-/// switches slides while it holds the focus, Down falls through to the rows.
+/// Circular prev/next control of the hero carousel. Mouse only: the D-pad
+/// switches slides while the poster itself holds the focus.
 class _HeroArrow extends StatelessWidget {
-  const _HeroArrow({required this.icon, required this.onSelect, required this.onStep, this.node});
+  const _HeroArrow({required this.icon, required this.onTap});
 
   final IconData icon;
-  final VoidCallback onSelect;
-  final FocusNode? node;
-
-  /// -1 for the previous slide, +1 for the next one.
-  final ValueChanged<int> onStep;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return TvFocusable(
-      focusNode: node,
-      autofocus: false,
-      onSelect: onSelect,
-      onKey: (event) {
-        if (event is KeyDownEvent || event is KeyRepeatEvent) {
-          if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-            onStep(-1);
-            return KeyEventResult.handled;
-          }
-          if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-            onStep(1);
-            return KeyEventResult.handled;
-          }
-        }
-        return KeyEventResult.ignored;
-      },
-      builder: (context, focused) => Container(
-        width: 52,
-        height: 52,
-        decoration: BoxDecoration(
-          color: focused ? Colors.white.withValues(alpha: 0.9) : Colors.white.withValues(alpha: 0.25),
-          shape: BoxShape.circle,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.22),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: 34, color: Colors.white),
         ),
-        child: Icon(icon, size: 34, color: focused ? Colors.black : Colors.white),
       ),
     );
   }
