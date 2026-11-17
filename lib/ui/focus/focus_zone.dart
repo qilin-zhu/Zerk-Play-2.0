@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import '../core/system_keyboard.dart';
 import '../core/text_focus.dart';
 import '../core/ui_sounds.dart';
+import '../../core/log/app_log.dart';
 
 class FocusZone extends StatefulWidget {
   const FocusZone({
@@ -100,6 +101,14 @@ ZoneScopeNode? _zoneOf(FocusNode node) {
 
 abstract final class ZoneNavigator {
   static bool move(TraversalDirection dir) {
+    final current = FocusManager.instance.primaryFocus;
+    if (current != null) {
+      AppLog.write('[zone] move ${dir.name} from ${current.debugLabel ?? current.runtimeType}');
+    }
+    return _move(dir);
+  }
+
+  static bool _move(TraversalDirection dir) {
     final current = FocusManager.instance.primaryFocus;
     if (current == null || current.context == null) return false;
     final zone = current is ZoneScopeNode ? current : _zoneOf(current);
@@ -323,6 +332,8 @@ void revealFocused(BuildContext context, {Duration duration = const Duration(mil
         math.max(leading - position.pixels, 0.0);
     final mostlyVisible =
         targetExtent > 0 && shown >= math.min(targetExtent, viewportExtent) * 0.5;
+    // A Left/Right press must never scroll a vertical view: rows are horizontal,
+    // so it cannot change what is visible there and only drags the page.
     double to;
     if (policy.keepVisible && mostlyVisible) {
       to = position.pixels;
@@ -341,6 +352,9 @@ void revealFocused(BuildContext context, {Duration duration = const Duration(mil
       to = position.pixels;
     }
     to = to.clamp(position.minScrollExtent, position.maxScrollExtent);
+    AppLog.write('[reveal] ${position.axisDirection.name} ctrl=${controller.runtimeType} '
+        'px=${position.pixels.round()}->${to.round()} '
+        'shown=${shown.round()}/${targetExtent.round()} keep=${policy.keepVisible}');
     if ((to - position.pixels).abs() > 0.5) {
       position.animateTo(to, duration: duration, curve: Curves.easeOutCubic);
     }

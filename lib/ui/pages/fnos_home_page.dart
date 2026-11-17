@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../../app/app_services.dart';
 import '../../core/fnos/fnos_client.dart';
 import '../../core/fnos/fnos_item.dart';
+import '../../core/log/app_log.dart';
 import '../../l10n/l10n.dart';
 import '../core/input_mode.dart';
 import '../core/navigation.dart';
@@ -132,6 +133,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   @override
   void initState() {
     super.initState();
+    AppLog.write('[fnos] home build hero-v6 (page-scroll-only, rows filtered out)');
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
     _autoTimer = Timer.periodic(_slideInterval, (_) => _autoAdvance());
   }
@@ -365,6 +367,30 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     _scroll.jumpTo((p.pixels + e.scrollDelta.dy).clamp(0.0, p.maxScrollExtent));
   }
 
+  /// Throttled trail of the page offset, so a log shows what moved the home.
+  int _lastLogMs = 0;
+  double _lastLogPx = 0;
+
+  void _logScroll(double pixels) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if ((pixels - _lastLogPx).abs() < 4) return;
+    if (now - _lastLogMs < 120) return;
+    _lastLogMs = now;
+    _lastLogPx = pixels;
+    AppLog.write('[fnos] scroll px=${pixels.round()}');
+  }
+
+  /// Separate throttle for the notifications we now refuse, so a log still
+  /// proves they arrived (and from which axis) without flooding it.
+  int _lastSkipMs = 0;
+
+  void _logSkip(ScrollNotification n) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastSkipMs < 400) return;
+    _lastSkipMs = now;
+    AppLog.write('[fnos] skip ${n.metrics.axisDirection.name} d=${n.depth} px=${n.metrics.pixels.round()}');
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
@@ -414,8 +440,23 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       Positioned.fill(
         child: NotificationListener<ScrollNotification>(
           onNotification: (n) {
+            // Each row is a horizontal ListView nested *inside* this page's own
+            // viewport, so its scroll notifications bubble up to this very
+            // listener. Writing their `metrics.pixels` -- a horizontal offset,
+            // several hundred px -- into the poster offset shrank the pinned
+            // poster by that amount and dragged its text upwards on every
+            // Left/Right key press ("the background turns into the poster wall
+            // and scrolls up"). Only the page's own vertical viewport is
+            // allowed to move the poster.
+            final ad = n.metrics.axisDirection;
+            final vertical = ad == AxisDirection.down || ad == AxisDirection.up;
+            if (!vertical || n.depth != 0) {
+              _logSkip(n);
+              return false;
+            }
             if ((_scrollOffset.value - n.metrics.pixels).abs() > 0.5) {
               _scrollOffset.value = n.metrics.pixels;
+              _logScroll(n.metrics.pixels);
             }
             return false;
           },
