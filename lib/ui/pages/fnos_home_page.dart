@@ -47,8 +47,12 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   static const _slideInterval = Duration(seconds: 10);
 
   /// Vertical room kept for the first row at the bottom of the viewport when the
-  /// page is at rest, so a row is always visible next to the poster.
-  static const _rowPeek = 216.0;
+  /// page is at rest: the whole continue-watching row (its title plus a 16:9
+  /// card and the caption under it) has to fit, so the same row is never rebased
+  /// by the focus reveal when the D-pad walks right inside it.
+  static const _rowTitleH = 50.0;
+  static const _resumeRowH = Zs.landscapeWidth * 0.5625 + 76;
+  static const _rowPeek = _rowTitleH + _resumeRowH + 12;
 
   /// Cap for the gradient that dissolves the poster's bottom edge into the page
   /// background (shorter posters use a proportionally shorter fade).
@@ -72,7 +76,11 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   List<FnOsItem>? _slides;
   int _slideIndex = 0;
   Timer? _autoTimer;
-  final _scroll = ScrollController();
+
+  /// `margin: 0` so focusing a card that is already fully visible never nudges
+  /// the page: the default 48px margin used to scroll the whole home (and shrink
+  /// the poster) on a plain Left/Right move inside a row.
+  final _scroll = RevealController(margin: 0);
   final _scrollOffset = ValueNotifier(0.0);
 
   /// Panel text (title/meta/overview) of the current slide.
@@ -105,6 +113,10 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   /// the carousel so the slide cannot change right before OK is pressed.
   bool get _heroHolding => _heroNode.hasFocus || _prevNode.hasFocus || _nextNode.hasFocus;
 
+  /// Painter of the focus frame around the info card (the poster itself is
+  /// edge to edge, so the frame belongs on the text block, not on the artwork).
+  final _heroFocus = ValueNotifier<bool>(false);
+
   FnosClient get _client => AppServicesScope.read(context).janus.fnos!;
 
   Map<String, String> _imageHeaders(FnosClient client) {
@@ -132,6 +144,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     _heroNode.dispose();
     _prevNode.dispose();
     _nextNode.dispose();
+    _heroFocus.dispose();
     super.dispose();
   }
 
@@ -447,9 +460,9 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
                   // never swallows clicks meant for the cards above it.
                   final hitH = (_rowTop - offset).clamp(0.0, h);
                   // Arrows sit at ~40% of the poster, but never on top of the
-                  // info block in the bottom-left corner.
-                  final panelBottom = h - _overlap - 34;
-                  final arrowTop = min(h * 0.40, panelBottom - 165);
+                  // info card in the bottom-left corner.
+                  final panelBottom = h - _overlap - 22;
+                  final arrowTop = min(h * 0.40, panelBottom - 175);
                   return Stack(children: [
                     if (hitH > 24)
                       Positioned(left: 0, top: 0, right: 0, height: hitH, child: _heroButton()),
@@ -530,6 +543,12 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
         child: TvFocusable(
           focusNode: _heroNode,
           onSelect: _openSlide,
+          onFocusChange: (f) {
+            _heroFocus.value = f;
+            // The poster is not inside the scroll view, so nothing brings it
+            // back into view when the D-pad returns to it from a row.
+            if (f && !InputMode.isPointer) _scrollToPoster();
+          },
           onKey: (event) {
             if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowDown) {
               _leaveHeroDown();
@@ -537,18 +556,9 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
             }
             return KeyEventResult.ignored;
           },
-          builder: (context, focused) => AnimatedContainer(
-            duration: Zm.fast,
-            curve: Zm.curve,
-            margin: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: focused ? Colors.white.withValues(alpha: 0.95) : Colors.transparent,
-                width: 3,
-              ),
-            ),
-          ),
+          // The focus frame is drawn around the info card (see _heroPoster), so
+          // the poster itself paints nothing.
+          builder: (context, focused) => const SizedBox.expand(),
         ),
       ),
     );
@@ -562,6 +572,15 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     if (identical(focus, _prevNode) || identical(focus, _nextNode)) {
       ZoneNavigator.move(TraversalDirection.down);
     }
+  }
+
+  /// Brings the pinned poster back to its resting size when the D-pad lands on
+  /// it, since it lives outside the scroll view and `revealFocused` cannot.
+  void _scrollToPoster() {
+    if (!_scroll.hasClients) return;
+    final p = _scroll.position;
+    if (p.pixels <= 0.5) return;
+    p.animateTo(0, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
   }
 
   /// `h` is the current poster height, `c` the collapse progress. The image is
@@ -584,12 +603,35 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
             child: const IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(gradient: _bottomFade))),
           ),
           // Info overlaid on the poster's bottom-left, above the overlapping row.
-          // `contentLeft` keeps it aligned with the row titles and cards.
+          // `contentLeft` keeps it aligned with the row titles and cards; the
+          // focus frame is drawn on this text card, not around the whole poster.
           Positioned(
-            left: contentLeft,
+            left: contentLeft - 20,
             right: 220,
-            bottom: _overlap + 34,
-            child: Opacity(opacity: fadeOut, child: Align(alignment: Alignment.bottomLeft, child: panel)),
+            bottom: _overlap + 22,
+            child: Opacity(
+              opacity: fadeOut,
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: IgnorePointer(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _heroFocus,
+                    builder: (_, focused, child) => AnimatedContainer(
+                      duration: Zm.fast,
+                      curve: Zm.curve,
+                      padding: const EdgeInsets.fromLTRB(20, 14, 24, 10),
+                      decoration: BoxDecoration(
+                        color: focused ? const Color(0x47000000) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: focused ? Colors.white : Colors.transparent, width: 2.5),
+                      ),
+                      child: child,
+                    ),
+                    child: panel,
+                  ),
+                ),
+              ),
+            ),
           ),
           // Indicator dots, right above the overlapping row.
           Positioned(
