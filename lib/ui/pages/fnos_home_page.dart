@@ -312,19 +312,14 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     final resume = _resume;
 
     // ---- poster geometry ---------------------------------------------------
-    // The poster is a 16:9 frame anchored right of the rail. If the viewport is
-    // too short to hold the whole frame plus a peek of the first row, the frame
-    // shrinks (width follows, aspect kept) instead of pushing rows off-screen.
+    // The poster fills the width right of the rail and keeps its 16:9 aspect,
+    // so the whole backdrop is visible at rest. The first row is then pinned
+    // `_rowPeek` px above the viewport bottom, covering the poster's bottom
+    // edge when there is not enough room for both (as requested).
     final size = MediaQuery.sizeOf(context);
     const railW = Zs.railCollapsed;
-    final availW = (size.width - railW).clamp(320.0, 4096.0);
-    var fullH = availW * 9 / 16;
-    var fullW = availW;
-    final maxH = (size.height - _rowPeek).clamp(180.0, 4096.0);
-    if (fullH > maxH) {
-      fullH = maxH;
-      fullW = fullH * 16 / 9;
-    }
+    final fullW = (size.width - railW).clamp(320.0, 4096.0);
+    final fullH = fullW * 9 / 16;
     _fullH = fullH;
     // Where the first row starts, and how much of the poster it covers.
     _rowTop = (size.height - _rowPeek).clamp(0.0, fullH);
