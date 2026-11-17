@@ -9,6 +9,8 @@ import '../../app/app_services.dart';
 import '../../core/fnos/fnos_client.dart';
 import '../../core/fnos/fnos_item.dart';
 import '../../l10n/l10n.dart';
+import '../core/input_mode.dart';
+import '../core/navigation.dart';
 import '../core/tv_scale.dart';
 import '../focus/focus_zone.dart';
 import '../focus/tv_focusable.dart';
@@ -20,6 +22,7 @@ import '../widgets/net_image.dart';
 import 'hero.dart' show HeroInfo, HeroPanel, formatRuntime;
 import 'fnos_cards.dart';
 import 'fnos_collections_page.dart' show FnOsMediaDb;
+import 'fnos_item_page.dart';
 
 /// Landing page for 飞牛影视 (fnOS trimemedia) sessions:
 ///   * a pinned 16:9 hero carousel of random resources that rotates every 10 s,
@@ -92,6 +95,16 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   FnosClient? _headersOwner;
   Map<String, String> _headers = const {};
 
+  /// Hero interaction: the whole poster is a single focusable button that opens
+  /// the resource currently shown, and the two arrows are their own nodes.
+  final _heroNode = FocusNode(debugLabel: 'fnos-hero');
+  final _prevNode = FocusNode(debugLabel: 'fnos-hero-prev');
+  final _nextNode = FocusNode(debugLabel: 'fnos-hero-next');
+
+  /// True while the D-pad (not the mouse) is somewhere on the hero, which holds
+  /// the carousel so the slide cannot change right before OK is pressed.
+  bool get _heroHolding => _heroNode.hasFocus || _prevNode.hasFocus || _nextNode.hasFocus;
+
   FnosClient get _client => AppServicesScope.read(context).janus.fnos!;
 
   Map<String, String> _imageHeaders(FnosClient client) {
@@ -116,6 +129,9 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     _scrollOffset.dispose();
     _heroImage.dispose();
     _hero.dispose();
+    _heroNode.dispose();
+    _prevNode.dispose();
+    _nextNode.dispose();
     super.dispose();
   }
 
@@ -223,12 +239,14 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   }
 
   /// Rotates the hero every [_slideInterval] whatever holds the focus; it only
-  /// pauses once the poster has been scrolled mostly away.
+  /// pauses once the poster has been scrolled mostly away, or while the D-pad is
+  /// sitting on the hero (mouse hover must not stop it, that was the old bug).
   void _autoAdvance() {
     if (!mounted) return;
     final slides = _slides;
     if (slides == null || slides.length < 2) return;
     if (_fullH > 0 && _scrollOffset.value > _fullH * 0.5) return;
+    if (_heroHolding && !InputMode.isPointer) return;
     setState(() => _slideIndex = (_slideIndex + 1) % slides.length);
     _showSlide();
   }
@@ -238,6 +256,16 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     if (s == null || s.length < 2) return;
     setState(() => _slideIndex = (_slideIndex + delta + s.length) % s.length);
     _showSlide(immediate: true);
+  }
+
+  /// Opens the detail page of the resource the poster is showing, exactly like
+  /// tapping its card in a row.
+  void _openSlide() {
+    final slide = _currentSlide;
+    if (slide == null) return;
+    Navigator.of(context).push(
+      tvRoute(FnOsItemPage(guid: slide.guid, seed: slide), name: 'fnos:${slide.guid}'),
+    );
   }
 
   String? _s(Map m, String key) {
@@ -330,8 +358,9 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
 
     // ---- poster geometry ---------------------------------------------------
     final size = MediaQuery.sizeOf(context);
-    const railW = Zs.railCollapsed;
-    final fullW = (size.width - railW).clamp(320.0, 4096.0);
+    // Full-bleed: the rail is a translucent overlay drawn on top of the page, so
+    // the artwork starts at x = 0 and runs underneath it.
+    final fullW = size.width.clamp(320.0, 4096.0);
     final fullH = fullW * 9 / 16;
     _fullH = fullH;
     // Where the first row starts, and how much of the poster it covers.
@@ -350,11 +379,12 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     );
 
     return Stack(children: [
-      // Poster layer (bottom): pinned, cropped from the bottom as it scrolls.
+      // Poster layer (bottom): pinned and full-bleed, cropped from the bottom as
+      // the page scrolls.
       Positioned(
-        left: railW,
+        left: 0,
         top: 0,
-        width: fullW,
+        right: 0,
         child: ValueListenableBuilder<double>(
           valueListenable: _scrollOffset,
           builder: (context, offset, _) {
@@ -404,33 +434,53 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
                   const SliverToBoxAdapter(child: SizedBox(height: 160)),
                 ],
               ),
-              // Carousel buttons float above the scroll view so they stay
-              // clickable while the poster's bottom is covered by rows. They sit
-              // in their own focus zone, a sibling of the rows' zones, so the
-              // D-pad can walk from here down into the first row.
+              // The poster itself is a button (opens the shown resource) and the
+              // carousel arrows float above it. They live in the top layer so
+              // the rows still paint over the poster's bottom edge.
               ValueListenableBuilder<double>(
                 valueListenable: _scrollOffset,
                 builder: (context, offset, _) {
                   final h = (fullH - offset).clamp(0.0, fullH);
                   final c = (offset / fullH).clamp(0.0, 1.0);
                   if (h <= 0.5 || c >= 0.6) return const SizedBox.shrink();
-                  return Positioned(
-                    left: railW + 16,
-                    right: 16,
-                    top: h * 0.40,
-                    height: 52,
-                    child: Opacity(
-                      opacity: (1 - c / 0.6).clamp(0.0, 1.0),
-                      child: FocusZone(
-                        debugLabel: 'fnos-hero-arrows',
-                        child: Row(children: [
-                          _HeroArrow(icon: Icons.chevron_left_rounded, onSelect: () => _stepSlide(-1), onStep: _stepSlide),
-                          const Spacer(),
-                          _HeroArrow(icon: Icons.chevron_right_rounded, onSelect: () => _stepSlide(1), onStep: _stepSlide),
-                        ]),
+                  // The poster button stops where the first row begins, so it
+                  // never swallows clicks meant for the cards above it.
+                  final hitH = (_rowTop - offset).clamp(0.0, h);
+                  // Arrows sit at ~40% of the poster, but never on top of the
+                  // info block in the bottom-left corner.
+                  final panelBottom = h - _overlap - 34;
+                  final arrowTop = min(h * 0.40, panelBottom - 165);
+                  return Stack(children: [
+                    if (hitH > 24)
+                      Positioned(left: 0, top: 0, right: 0, height: hitH, child: _heroButton()),
+                    Positioned(
+                      left: contentLeft,
+                      right: 16,
+                      top: arrowTop.clamp(16.0, max(16.0, h - 52)),
+                      height: 52,
+                      child: Opacity(
+                        opacity: (1 - c / 0.6).clamp(0.0, 1.0),
+                        child: FocusZone(
+                          debugLabel: 'fnos-hero-arrows',
+                          child: Row(children: [
+                            _HeroArrow(
+                              node: _prevNode,
+                              icon: Icons.chevron_left_rounded,
+                              onSelect: () => _stepSlide(-1),
+                              onStep: _stepSlide,
+                            ),
+                            const Spacer(),
+                            _HeroArrow(
+                              node: _nextNode,
+                              icon: Icons.chevron_right_rounded,
+                              onSelect: () => _stepSlide(1),
+                              onStep: _stepSlide,
+                            ),
+                          ]),
+                        ),
                       ),
                     ),
-                  );
+                  ]);
                 },
               ),
             ]),
@@ -463,6 +513,57 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     ]);
   }
 
+  /// The whole poster is one button: a mouse click or OK on the D-pad opens the
+  /// resource currently shown. A ring marks the focus so it is obvious that the
+  /// poster can be selected.
+  Widget _heroButton() {
+    return FocusZone(
+      debugLabel: 'fnos-hero',
+      child: GestureDetector(
+        // The scroll view is a sibling underneath, so a drag on the artwork has
+        // to scroll the page itself (the wheel is handled by the page listener).
+        onVerticalDragUpdate: (d) {
+          if (!_scroll.hasClients) return;
+          final p = _scroll.position;
+          _scroll.jumpTo((p.pixels - d.delta.dy).clamp(0.0, p.maxScrollExtent));
+        },
+        child: TvFocusable(
+          focusNode: _heroNode,
+          onSelect: _openSlide,
+          onKey: (event) {
+            if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowDown) {
+              _leaveHeroDown();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          builder: (context, focused) => AnimatedContainer(
+            duration: Zm.fast,
+            curve: Zm.curve,
+            margin: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: focused ? Colors.white.withValues(alpha: 0.95) : Colors.transparent,
+                width: 3,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Down from the poster must reach the first row. The arrows overlap the
+  /// poster's rect, so the first step can land on one of them instead.
+  void _leaveHeroDown() {
+    ZoneNavigator.move(TraversalDirection.down);
+    final focus = FocusManager.instance.primaryFocus;
+    if (identical(focus, _prevNode) || identical(focus, _nextNode)) {
+      ZoneNavigator.move(TraversalDirection.down);
+    }
+  }
+
   /// `h` is the current poster height, `c` the collapse progress. The image is
   /// laid out at the full height and top-anchored, so [ClipRect] crops it from
   /// the bottom as the page scrolls; a gradient then dissolves the cut edge into
@@ -483,8 +584,9 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
             child: const IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(gradient: _bottomFade))),
           ),
           // Info overlaid on the poster's bottom-left, above the overlapping row.
+          // `contentLeft` keeps it aligned with the row titles and cards.
           Positioned(
-            left: 56,
+            left: contentLeft,
             right: 220,
             bottom: _overlap + 34,
             child: Opacity(opacity: fadeOut, child: Align(alignment: Alignment.bottomLeft, child: panel)),
@@ -552,10 +654,11 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
 /// Circular prev/next control of the hero carousel. Left/Right on the D-pad
 /// switches slides while it holds the focus, Down falls through to the rows.
 class _HeroArrow extends StatelessWidget {
-  const _HeroArrow({required this.icon, required this.onSelect, required this.onStep});
+  const _HeroArrow({required this.icon, required this.onSelect, required this.onStep, this.node});
 
   final IconData icon;
   final VoidCallback onSelect;
+  final FocusNode? node;
 
   /// -1 for the previous slide, +1 for the next one.
   final ValueChanged<int> onStep;
@@ -563,6 +666,7 @@ class _HeroArrow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
+      focusNode: node,
       autofocus: false,
       onSelect: onSelect,
       onKey: (event) {

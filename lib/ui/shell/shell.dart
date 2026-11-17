@@ -437,6 +437,11 @@ class _Rail extends StatefulWidget {
 }
 
 class _RailState extends State<_Rail> {
+  /// Width of the collapsed rail. It is a translucent overlay on top of the page
+  /// (the artwork runs underneath it), so it is kept narrow and the content
+  /// insets stay where they were.
+  static const _collapsedW = 76.0;
+
   final _groupNodes = {for (final g in _Group.values) g: FocusNode(debugLabel: 'rail-group:${g.name}')};
 
   _Group? _focusGroup;
@@ -511,7 +516,7 @@ class _RailState extends State<_Rail> {
     return AnimatedContainer(
       duration: Zm.normal,
       curve: Zm.curve,
-      width: expanded ? Zs.railExpanded + 120 : Zs.railCollapsed,
+      width: expanded ? Zs.railExpanded + 120 : _collapsedW,
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.centerLeft,
@@ -519,10 +524,12 @@ class _RailState extends State<_Rail> {
           stops: const [0, 0.55, 1],
           colors: expanded
               ? const [Color(0xF20B0B12), Color(0xE00B0B12), Color(0x000B0B12)]
-              : const [Color(0xCC0B0B12), Color(0x990B0B12), Color(0x000B0B12)],
+              // Collapsed, the rail floats over the page: only a soft scrim so
+              // the artwork underneath stays visible instead of a solid bar.
+              : const [Color(0xA6000000), Color(0x38000000), Color(0x00000000)],
         ),
       ),
-      padding: const EdgeInsets.only(left: 20, top: 48, bottom: 48),
+      padding: EdgeInsets.only(left: expanded ? 20 : 6, top: 48, bottom: 48),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -652,7 +659,14 @@ class _RailItem extends StatelessWidget {
                       ),
                     )
                   else
-                    Icon(icon ?? tab!.icon, size: child ? 24 : 28, color: fg),
+                    Icon(
+                      icon ?? tab!.icon,
+                      size: child ? 24 : 28,
+                      color: fg,
+                      // Collapsed, the rail floats over the artwork: a soft
+                      // shadow keeps the glyph readable on bright posters.
+                      shadows: expanded ? null : const [Shadow(color: Color(0xB3000000), blurRadius: 12)],
+                    ),
                   if (expanded)
                     Expanded(
                       child: Padding(
