@@ -289,11 +289,11 @@ class RevealController extends ScrollController {
   final double anchor;
   final double margin;
 
-  /// When true, an item that is already fully inside the viewport is left
-  /// exactly where it is. Without it a short item sitting above the viewport's
-  /// trailing edge is treated as "outside" and the view is snapped back to its
-  /// leading edge, which yanks the whole page (and a pinned backdrop) around on
-  /// a plain Left/Right move inside a row.
+  /// When true, a target that is already at least half inside the viewport is
+  /// left exactly where it is. Without it a short item sitting above the
+  /// viewport's trailing edge counts as "outside" and the view is nudged (or
+  /// snapped back to its leading edge), which yanks the whole page - and a
+  /// pinned backdrop - around on a plain Left/Right move inside a row.
   final bool keepVisible;
 }
 
@@ -316,10 +316,15 @@ void revealFocused(BuildContext context, {Duration duration = const Duration(mil
 
     final leading = viewport.getOffsetToReveal(target, 0).offset;
     final trailing = viewport.getOffsetToReveal(target, 1).offset;
-    // Fully inside the viewport already (both edges in range)?
-    final visible = position.pixels <= leading + 0.5 && position.pixels >= trailing - 0.5;
+    // How much of the target already sits inside the viewport.
+    final viewportExtent = position.viewportDimension;
+    final targetExtent = (trailing - leading) + viewportExtent;
+    final shown = math.min(leading - position.pixels + targetExtent, viewportExtent) -
+        math.max(leading - position.pixels, 0.0);
+    final mostlyVisible =
+        targetExtent > 0 && shown >= math.min(targetExtent, viewportExtent) * 0.5;
     double to;
-    if (policy.keepVisible && visible) {
+    if (policy.keepVisible && mostlyVisible) {
       to = position.pixels;
     } else if (top && axisDirectionToAxis(position.axisDirection) == Axis.vertical) {
       to = position.minScrollExtent;

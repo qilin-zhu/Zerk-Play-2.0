@@ -77,11 +77,11 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   int _slideIndex = 0;
   Timer? _autoTimer;
 
-  /// `margin: 0` + `keepVisible` so focusing a card that is already fully
-  /// visible never touches the page scroll: the default policy snaps the view
-  /// back to its leading edge for any card that ends above the viewport's
-  /// bottom, which used to shove the whole home (and the pinned poster) around
-  /// on a plain Left/Right move inside a row.
+  /// `margin: 0` + `keepVisible` so focusing a card that is already (mostly) on
+  /// screen never touches the page scroll. Left/Right inside a row must not
+  /// move the page at all: it used to scroll (the default policy snaps the view
+  /// to the leading edge for a card ending above the viewport's bottom), which
+  /// shrank the pinned poster and dragged its text up on every key press.
   final _scroll = RevealController(margin: 0, keepVisible: true);
   final _scrollOffset = ValueNotifier(0.0);
 
