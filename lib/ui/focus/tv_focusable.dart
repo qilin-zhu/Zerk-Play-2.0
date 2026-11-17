@@ -13,6 +13,7 @@ class TvFocusable extends StatefulWidget {
     required this.builder,
     this.onSelect,
     this.onMenu,
+    this.onKey,
     this.onFocusChange,
     this.focusNode,
     this.autofocus = false,
@@ -23,6 +24,12 @@ class TvFocusable extends StatefulWidget {
   final Widget Function(BuildContext context, bool focused) builder;
   final VoidCallback? onSelect;
   final VoidCallback? onMenu;
+
+  /// Optional extra key handler, consulted before the built-in OK/menu handling.
+  /// Return [KeyEventResult.ignored] to fall through to the default behaviour
+  /// (including the global D-pad navigation shortcuts).
+  final KeyEventResult Function(KeyEvent event)? onKey;
+
   final ValueChanged<bool>? onFocusChange;
   final FocusNode? focusNode;
   final bool autofocus;
@@ -52,6 +59,8 @@ class _TvFocusableState extends State<TvFocusable> {
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    final custom = widget.onKey?.call(event);
+    if (custom != null && custom != KeyEventResult.ignored) return custom;
     final key = event.logicalKey;
     final isOk = key == LogicalKeyboardKey.enter ||
         key == LogicalKeyboardKey.numpadEnter ||
