@@ -17,7 +17,14 @@ import '../widgets/zerk_logo.dart';
 import 'onboarding_page.dart';
 
 class SignInPage extends StatefulWidget {
-  const SignInPage({super.key});
+  const SignInPage({super.key, this.startManual = false, this.addServer = false});
+
+  /// Open straight on the manual form instead of the sync-code one.
+  final bool startManual;
+
+  /// Pushed on top of the shell from the sidebar's server switcher: the fields
+  /// start empty and the route closes itself once the login went through.
+  final bool addServer;
 
   @override
   State<SignInPage> createState() => _SignInPageState();
@@ -38,6 +45,8 @@ class _SignInPageState extends State<SignInPage> {
   @override
   void initState() {
     super.initState();
+    _manual = widget.startManual;
+    if (widget.addServer) return; // a new server must not inherit the old one
     final janus = AppServicesScope.read(context).janus;
     janus.getServerUrl().then((url) {
       if (mounted && url.isNotEmpty) _server.text = url;
@@ -106,7 +115,16 @@ class _SignInPageState extends State<SignInPage> {
         if (url.isNotEmpty && !url.contains('://')) url = 'http://$url';
         await AppServicesScope.read(context)
             .signIn(server: url, kind: _kind, username: _user.text.trim(), password: _pass.text);
+        _closeIfAdded();
       });
+
+  /// The account is remembered by [AppServices.signIn] itself, so all that is
+  /// left here is to drop the pushed route and land on the new session.
+  void _closeIfAdded() {
+    if (!widget.addServer || !mounted) return;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
+  }
 
   Future<void> _otherCode() async {
     await AppServicesScope.read(context).unlinkHub();
@@ -128,7 +146,7 @@ class _SignInPageState extends State<SignInPage> {
   Widget build(BuildContext context) {
     final firstRun = !AppServicesScope.of(context).settings.onboarded;
     return PopScope(
-      canPop: !_manual,
+      canPop: widget.addServer || !_manual,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _manual) _showManual(false);
       },
@@ -330,7 +348,8 @@ class _SignInPageState extends State<SignInPage> {
                   Text(l10n.stepOf(1, OnboardingPage.stepCount + 1), style: Zt.caption.copyWith(color: Zc.accentSoft)),
                   const SizedBox(height: 10),
                 ],
-                Text(l10n.signInWelcome, style: Zt.display.copyWith(fontSize: 52)),
+                Text(widget.addServer ? l10n.serversAddTitle : l10n.signInWelcome,
+                    style: Zt.display.copyWith(fontSize: 52)),
                 const SizedBox(height: 12),
                 Text(l10n.signInSubtitle, style: Zt.body),
                 const SizedBox(height: 32),
@@ -354,17 +373,26 @@ class _SignInPageState extends State<SignInPage> {
                     onSelect: _signInManual,
                   ),
                   const SizedBox(width: 16),
-                  TvButton(label: l10n.codeBack, icon: Icons.qr_code_2_rounded, onSelect: () => _showManual(false)),
+                  if (widget.addServer)
+                    TvButton(
+                      label: l10n.cancel,
+                      icon: Icons.close_rounded,
+                      onSelect: () => Navigator.of(context).maybePop(),
+                    )
+                  else
+                    TvButton(label: l10n.codeBack, icon: Icons.qr_code_2_rounded, onSelect: () => _showManual(false)),
                 ]),
                 _errorText(),
               ],
             ),
           ),
         ),
-        const SizedBox(width: 90),
-        Container(width: 1.5, height: 520, color: Zc.outline),
-        const SizedBox(width: 90),
-        const SizedBox(width: 760, child: RemoteSetupPanel()),
+        if (!widget.addServer) ...[
+          const SizedBox(width: 90),
+          Container(width: 1.5, height: 520, color: Zc.outline),
+          const SizedBox(width: 90),
+          const SizedBox(width: 760, child: RemoteSetupPanel()),
+        ],
       ],
     );
   }

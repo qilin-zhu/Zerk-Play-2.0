@@ -26,6 +26,7 @@ import '../services/janus/janus_service.dart';
 import '../ui/core/ui_sounds.dart';
 import 'app_settings.dart';
 import 'hub_link.dart';
+import 'saved_servers.dart';
 
 final class AppServices extends ChangeNotifier {
   AppServices._({
@@ -34,6 +35,7 @@ final class AppServices extends ChangeNotifier {
     required this.playback,
     required this.together,
     required this.profiles,
+    required this.servers,
     required this._settings,
   }) {
     var togetherAvailable = together.available;
@@ -62,6 +64,9 @@ final class AppServices extends ChangeNotifier {
   final WatchTogether together;
 
   final ProfileService profiles;
+
+  /// Servers this device has signed in to, for the sidebar's switcher.
+  final SavedServers servers;
 
   AppSettings _settings;
   AppSettings get settings => _settings;
@@ -142,6 +147,8 @@ final class AppServices extends ChangeNotifier {
     );
     await janus.init();
     await janus.restoreSession();
+    final servers = SavedServers(store);
+    await servers.load();
     if (!hadSettings && janus.isAuthenticated) {
       settings = settings.copyWith(onboarded: true);
       await settings.save();
@@ -155,6 +162,7 @@ final class AppServices extends ChangeNotifier {
         device: Host.isAndroid ? 'Android TV' : Host.isLinux ? 'Linux' : 'Windows',
       ),
       profiles: ProfileService(janus: janus),
+      servers: servers,
       settings: settings,
     );
     services._detectHub();
@@ -175,6 +183,7 @@ final class AppServices extends ChangeNotifier {
   @override
   void dispose() {
     _hubTimer?.cancel();
+    servers.dispose();
     super.dispose();
   }
 
@@ -241,7 +250,23 @@ final class AppServices extends ChangeNotifier {
 
   Future<void> signIn(
       {required String server, ServerKind kind = ServerKind.emby, required String username, required String password}) async {
+    final previous = janus.isAuthenticated ? '${janus.session.serverUrl}' : null;
     await janus.login(serverUrl: server, kind: kind, username: username, password: password);
+    // Recorded before notifying: the sidebar rebuilds on the notification and
+    // has to list this server straight away. The display name arrives later,
+    // from the server itself, so a slow or missing /System/Info/Public never
+    // holds the login up.
+    final url = janus.session.serverUrl.toString();
+    // Switching servers mid-session (the sidebar's switcher): the watch party
+    // and the user profile belong to the server that was open before.
+    if (previous == null || SavedServer.normalize(previous) != SavedServer.normalize(url)) {
+      together.leave();
+      profiles.clear();
+    }
+    await servers.remember(url: url, kind: kind, username: username, password: password);
+    if (kind != ServerKind.fnos) {
+      unawaited(_nameServer('${kind.name}|${SavedServer.normalize(url)}|$username'));
+    }
     HubLink.droppedMessage = null;
     if (kind != ServerKind.fnos) {
       catalog.collections?.invalidate();
@@ -252,6 +277,18 @@ final class AppServices extends ChangeNotifier {
     notifyListeners();
     if (kind != ServerKind.fnos) unawaited(_detectEmbyTv());
     _detectHub();
+  }
+
+  /// Emby and Jellyfin publish their display name without auth; trimemedia has
+  /// no such endpoint, so fnOS entries keep the host as their name.
+  Future<void> _nameServer(String id) async {
+    try {
+      final info = await janus.client.getJson('/System/Info/Public').timeout(const Duration(seconds: 6));
+      final name = (info['ServerName'] as String?)?.trim() ?? '';
+      if (name.isNotEmpty) await servers.rename(id, name);
+    } catch (e) {
+      debugPrint('[servers] name lookup: $e');
+    }
   }
 
   Future<HubConfig> linkHub(String code, {String? hub}) async {

@@ -191,7 +191,14 @@ class _ZerkAppState extends State<ZerkApp> {
           ? const SignInPage()
           : !services.settings.onboarded
               ? const OnboardingPage(key: ValueKey('onboarding'))
-              : Shell(key: const ValueKey('shell'), initialTab: widget.initialTab),
+              // Keyed by the session: the sidebar switches servers without
+              // leaving the shell, and every page under it caches the previous
+              // server's rows and libraries. A new key throws that state away.
+              : Shell(
+                  key: ValueKey(
+                      'shell:${services.janus.session.kind.name}:${services.janus.session.serverUrl}:${services.janus.session.userId}'),
+                  initialTab: widget.initialTab,
+                ),
     );
   }
 }

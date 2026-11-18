@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/app_services.dart';
+import '../../app/saved_servers.dart';
 import '../../core/emby/server_kind.dart';
 import '../../core/log/app_log.dart';
 import '../../data/user_profile.dart';
@@ -33,10 +34,12 @@ import '../pages/my_list_page.dart';
 import '../pages/profile_page.dart';
 import '../pages/search_page.dart';
 import '../pages/settings_page.dart';
+import '../pages/sign_in_page.dart';
 import '../pages/together_page.dart';
 import '../theme/tokens.dart';
 import '../widgets/exit_app.dart';
 import '../widgets/profile_widgets.dart';
+import '../widgets/server_menu.dart';
 import '../widgets/wall_clock.dart';
 import '../widgets/update_dialog.dart';
 import '../widgets/zerk_logo.dart';
@@ -95,12 +98,19 @@ class _ShellState extends State<Shell> {
 
   bool _railHovered = false;
   final _railNodes = {for (final t in ShellTab.values) t: FocusNode(debugLabel: 'rail:${t.name}')};
+
+  /// The Zerk Play mark is the entry point of the server switcher, so it needs
+  /// a node of its own to be reachable from the D-pad.
+  final _logoNode = FocusNode(debugLabel: 'rail:logo');
+
+  bool _menuOpen = false;
   StreamSubscription<RoomState>? _roomSub;
   String? _roomCode;
 
   @override
   void initState() {
     super.initState();
+    AppLog.write('[shell] build server-menu-v1 (saved servers, one-tap switch)');
     if (kReleaseMode && Updater.supported) {
       Future.delayed(const Duration(seconds: 5), () => mounted ? checkForUpdate(context) : null);
     }
@@ -212,6 +222,7 @@ class _ShellState extends State<Shell> {
     for (final n in _railNodes.values) {
       n.dispose();
     }
+    _logoNode.dispose();
     super.dispose();
   }
 
@@ -262,6 +273,11 @@ class _ShellState extends State<Shell> {
   }
 
   bool _onBack() {
+    if (_menuOpen) {
+      UiSounds.play(UiSound.back);
+      _closeMenu();
+      return true;
+    }
     if (!_railFocused) {
       _focusRail();
       UiSounds.play(UiSound.back);
@@ -282,6 +298,35 @@ class _ShellState extends State<Shell> {
     if (zone != null) ZoneNavigator.enter(zone);
   }
 
+  /// Identity of the open session, compared against [SavedServer.serverKey] so
+  /// the switcher can mark — and skip — the server that is already running.
+  String? get _serverKey {
+    if (!_services.isSignedIn) return null;
+    final session = _services.janus.session;
+    return SavedServer.keyOf('${session.serverUrl}', session.kind);
+  }
+
+  void _openMenu() {
+    if (_menuOpen) return;
+    debugPrint('[servers] switcher open: ${_services.servers.items.length} saved');
+    setState(() => _menuOpen = true);
+  }
+
+  void _closeMenu({bool restoreFocus = true}) {
+    if (!_menuOpen) return;
+    setState(() => _menuOpen = false);
+    if (restoreFocus) _focusRail();
+  }
+
+  /// "Add server" in the switcher: the manual form, pushed over the shell so it
+  /// can be dismissed again. Signing in there records the account, so it shows
+  /// up in the list as soon as the route pops.
+  void _addServer() {
+    final navigator = Navigator.of(context);
+    _closeMenu(restoreFocus: false);
+    navigator.push(MaterialPageRoute(builder: (_) => const SignInPage(startManual: true, addServer: true)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final services = AppServicesScope.of(context);
@@ -292,66 +337,108 @@ class _ShellState extends State<Shell> {
       onBack: _onBack,
       child: Material(
         color: Zc.background,
-        child: Stack(
-          children: [
-            for (final t in tabs)
-              if (_visited.contains(t))
-                Offstage(
-                  key: _pageZoneKeys[t],
-                  offstage: t != _tab,
-                  child: TickerMode(
-                    enabled: t == _tab,
-                    child: ExcludeFocus(excluding: t != _tab, child: _page(t)),
+        child: ValueListenableBuilder(
+          valueListenable: InputMode.pointer,
+          builder: (context, pointer, _) {
+            // The rail widens while the switcher is open, so the panel can be
+            // anchored to its right edge without measuring anything.
+            final railExpanded = _menuOpen || (_railFocused && (!pointer || _railHovered));
+            final railWidth = railExpanded ? _Rail.expandedWidth : _Rail.collapsedWidth;
+            final panelHeight = (MediaQuery.sizeOf(context).height - 40).clamp(360.0, 760.0).toDouble();
+            return Stack(
+              children: [
+                // While the switcher is open the page must not take the focus:
+                // a Right press inside the panel would otherwise land on the
+                // artwork behind it.
+                Positioned.fill(
+                  child: ExcludeFocus(
+                    excluding: _menuOpen,
+                    child: Stack(
+                      children: [
+                        for (final t in tabs)
+                          if (_visited.contains(t))
+                            Offstage(
+                              key: _pageZoneKeys[t],
+                              offstage: t != _tab,
+                              child: TickerMode(
+                                enabled: t == _tab,
+                                child: ExcludeFocus(excluding: t != _tab, child: _page(t)),
+                              ),
+                            ),
+                        if (services.settings.homeClock && _tab == ShellTab.home)
+                          const Positioned(
+                              top: 44, right: 72, child: IgnorePointer(child: WallClock(shadow: true))),
+                      ],
+                    ),
                   ),
                 ),
-            if (services.settings.homeClock && _tab == ShellTab.home)
-              const Positioned(top: 44, right: 72, child: IgnorePointer(child: WallClock(shadow: true))),
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              child: ValueListenableBuilder(
-                valueListenable: HomePage.firstLoad,
-                builder: (context, loading, rail) {
-                  // HomePage.firstLoad only settles for the Emby home; the fnOS
-                  // home never touches it, so the rail must not key off it there.
-                  final hidden = loading && _tab == ShellTab.home && !_isFnos;
-                  return IgnorePointer(
-                    ignoring: hidden,
-                    child: ExcludeFocus(
-                      excluding: hidden,
-                      child: AnimatedOpacity(opacity: hidden ? 0 : 1, duration: const Duration(milliseconds: 600), child: rail),
-                    ),
-                  );
-                },
-                child: MouseRegion(
-                  onEnter: (_) => setState(() => _railHovered = true),
-                  onExit: (_) => setState(() => _railHovered = false),
-                  child: Focus(
-                    canRequestFocus: false,
-                    skipTraversal: true,
-                    onFocusChange: (f) => setState(() => _railFocused = f),
-                    child: FocusZone(
-                      key: _railZoneKey,
-                      debugLabel: 'rail',
-                      preferredEntry: () => _railNodes[_tab],
-                      child: ValueListenableBuilder(
-                        valueListenable: InputMode.pointer,
-                        builder: (context, pointer, _) => _Rail(
-                          tabs: tabs,
-                          profile: services.profiles.profile,
-                          current: _tab,
-                          expanded: _railFocused && (!pointer || _railHovered),
-                          onSelect: _select,
-                          nodes: _railNodes,
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: ValueListenableBuilder(
+                    valueListenable: HomePage.firstLoad,
+                    builder: (context, loading, rail) {
+                      // HomePage.firstLoad only settles for the Emby home; the
+                      // fnOS home never touches it, so the rail must not key off
+                      // it there.
+                      final hidden = loading && _tab == ShellTab.home && !_isFnos;
+                      return IgnorePointer(
+                        ignoring: hidden,
+                        child: ExcludeFocus(
+                          excluding: hidden,
+                          child: AnimatedOpacity(
+                              opacity: hidden ? 0 : 1, duration: const Duration(milliseconds: 600), child: rail),
+                        ),
+                      );
+                    },
+                    child: MouseRegion(
+                      onEnter: (_) => setState(() => _railHovered = true),
+                      onExit: (_) => setState(() => _railHovered = false),
+                      child: Focus(
+                        canRequestFocus: false,
+                        skipTraversal: true,
+                        onFocusChange: (f) => setState(() => _railFocused = f),
+                        child: FocusZone(
+                          key: _railZoneKey,
+                          debugLabel: 'rail',
+                          preferredEntry: () => _railNodes[_tab],
+                          child: _Rail(
+                            tabs: tabs,
+                            profile: services.profiles.profile,
+                            current: _tab,
+                            expanded: railExpanded,
+                            menuOpen: _menuOpen,
+                            logoNode: _logoNode,
+                            onOpenServers: _openMenu,
+                            onSelect: _select,
+                            nodes: _railNodes,
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
-          ],
+                if (_menuOpen) ...[
+                  // Any click that is not on the panel dismisses it, the same
+                  // way the sheet-like switcher behaves in the reference.
+                  Positioned.fill(
+                    child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _closeMenu),
+                  ),
+                  Positioned(
+                    left: railWidth + 6,
+                    top: 20,
+                    child: ServerMenuPanel(
+                      currentKey: _serverKey,
+                      height: panelHeight,
+                      onClose: _closeMenu,
+                      onAdd: _addServer,
+                    ),
+                  ),
+                ],
+              ],
+            );
+          },
         ),
       ),
     );
@@ -420,9 +507,18 @@ class _Rail extends StatefulWidget {
     required this.profile,
     required this.current,
     required this.expanded,
+    required this.menuOpen,
+    required this.logoNode,
+    required this.onOpenServers,
     required this.onSelect,
     required this.nodes,
   });
+
+  /// Width of the collapsed rail. It is a translucent overlay on top of the
+  /// page (the artwork runs underneath it), so it is kept narrow and the
+  /// content insets stay where they were.
+  static const collapsedWidth = 76.0;
+  static const expandedWidth = Zs.railExpanded + 120;
 
   final Map<ShellTab, FocusNode> nodes;
   final List<ShellTab> tabs;
@@ -430,6 +526,11 @@ class _Rail extends StatefulWidget {
   final UserProfile? profile;
   final ShellTab current;
   final bool expanded;
+
+  /// The server switcher is showing: the logo keeps its chevron turned down.
+  final bool menuOpen;
+  final FocusNode logoNode;
+  final VoidCallback onOpenServers;
   final ValueChanged<ShellTab> onSelect;
 
   @override
@@ -437,11 +538,6 @@ class _Rail extends StatefulWidget {
 }
 
 class _RailState extends State<_Rail> {
-  /// Width of the collapsed rail. It is a translucent overlay on top of the page
-  /// (the artwork runs underneath it), so it is kept narrow and the content
-  /// insets stay where they were.
-  static const _collapsedW = 76.0;
-
   final _groupNodes = {for (final g in _Group.values) g: FocusNode(debugLabel: 'rail-group:${g.name}')};
 
   _Group? _focusGroup;
@@ -516,7 +612,7 @@ class _RailState extends State<_Rail> {
     return AnimatedContainer(
       duration: Zm.normal,
       curve: Zm.curve,
-      width: expanded ? Zs.railExpanded + 120 : _collapsedW,
+      width: expanded ? _Rail.expandedWidth : _Rail.collapsedWidth,
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.centerLeft,
@@ -533,7 +629,12 @@ class _RailState extends State<_Rail> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _Logo(expanded: expanded),
+          _Logo(
+            expanded: expanded,
+            open: widget.menuOpen,
+            node: widget.logoNode,
+            onSelect: widget.onOpenServers,
+          ),
           const Spacer(),
           for (final entry in _railOrder)
             if (entry is ShellTab && tabs.contains(entry))
@@ -554,33 +655,69 @@ class _RailState extends State<_Rail> {
 }
 
 class _Logo extends StatelessWidget {
-  const _Logo({required this.expanded});
+  const _Logo({required this.expanded, required this.open, required this.node, required this.onSelect});
 
   final bool expanded;
+  final bool open;
+  final FocusNode node;
+  final VoidCallback onSelect;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(left: 8),
-      child: Row(
-        children: [
-          const ZerkLogo(size: 48),
-          if (expanded)
-            Flexible(
-              child: Padding(
-                padding: const EdgeInsets.only(left: 16),
-                child: Text.rich(
-                  const TextSpan(children: [
-                    TextSpan(text: 'Zerk', style: TextStyle(fontWeight: FontWeight.w800)),
-                    TextSpan(text: ' Play', style: TextStyle(fontWeight: FontWeight.w400, color: Zc.textMuted)),
-                  ]),
-                  maxLines: 1,
-                  overflow: TextOverflow.clip,
-                  style: Zt.title.copyWith(height: 1),
+      // The whole mark is the button: the chevron alone would be a tiny target,
+      // and on the D-pad it is the only way into the server switcher.
+      child: TvFocusable(
+        focusNode: node,
+        reveal: false,
+        onSelect: onSelect,
+        builder: (context, focused) => AnimatedContainer(
+          duration: Zm.fast,
+          curve: Zm.curve,
+          padding: EdgeInsets.only(right: expanded ? 14 : 0),
+          decoration: BoxDecoration(
+            color: focused ? Colors.white.withValues(alpha: 0.10) : Colors.transparent,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ZerkLogo(size: 48),
+              if (expanded)
+                Flexible(
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 16),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text.rich(
+                            const TextSpan(children: [
+                              TextSpan(text: 'Zerk', style: TextStyle(fontWeight: FontWeight.w800)),
+                              TextSpan(
+                                  text: ' Play', style: TextStyle(fontWeight: FontWeight.w400, color: Zc.textMuted)),
+                            ]),
+                            maxLines: 1,
+                            overflow: TextOverflow.clip,
+                            style: Zt.title.copyWith(height: 1),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        AnimatedRotation(
+                          turns: open ? 0.5 : 0,
+                          duration: Zm.normal,
+                          curve: Zm.curve,
+                          child: Icon(Icons.expand_more_rounded,
+                              size: 28, color: focused ? Colors.white : Zc.textMuted),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }
