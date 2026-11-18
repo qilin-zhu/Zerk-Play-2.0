@@ -73,10 +73,18 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   String? _error;
   bool _busy = false;
 
-  // Hero carousel: a random pool of resources, auto-advancing every 10 s.
+  /// Hero carousel: a random pool of resources that advances every
+  /// [_slideInterval]. Pointing at (or focusing) a card pauses it and shows
+  /// that resource instead; it only starts again once the poster itself is
+  /// hovered or focused — see [_pinSlide] and [_resumeFromHero].
   List<FnOsItem>? _slides;
   int _slideIndex = 0;
-  Timer? _autoTimer;
+  Timer? _slideTimer;
+
+  /// Set while the hero shows a card the user picked: the carousel is parked
+  /// until the poster area is selected again.
+  bool _pinned = false;
+  FnOsItem? _pinnedItem;
 
   /// `margin: 0` + `keepVisible` so focusing a card that is already (mostly) on
   /// screen never touches the page scroll. Left/Right inside a row must not
@@ -111,8 +119,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   /// no focus nodes at all.
   final _heroNode = FocusNode(debugLabel: 'fnos-hero');
 
-  /// True while the D-pad is on the hero, which holds the carousel so the slide
-  /// cannot change right before OK is pressed.
+  /// True while the D-pad is on the hero (see [_pageKeys]).
   bool get _heroHolding => _heroNode.hasFocus;
 
   /// Keyboard focus on the poster: only the plate behind the info text changes.
@@ -146,14 +153,23 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   @override
   void initState() {
     super.initState();
-    AppLog.write('[fnos] home build hero-v8 (plate focus, hover arrows, hero anchor, up-fallback)');
+    AppLog.write('[fnos] home build hero-v9 (random carousel, pin on card, resume on hero)');
+    HardwareKeyboard.instance.addHandler(_watchKey);
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
-    _autoTimer = Timer.periodic(_slideInterval, (_) => _autoAdvance());
+  }
+
+  /// Global watcher for the pin policy: a card's own key handler consumes the
+  /// arrows it uses, so the page-level handler never sees them. This one sees
+  /// every press and only records the time.
+  bool _watchKey(KeyEvent event) {
+    if (event is! KeyUpEvent) _lastKeyMs = DateTime.now().millisecondsSinceEpoch;
+    return false;
   }
 
   @override
   void dispose() {
-    _autoTimer?.cancel();
+    HardwareKeyboard.instance.removeHandler(_watchKey);
+    _slideTimer?.cancel();
     _scroll.dispose();
     _scrollOffset.dispose();
     _heroImage.dispose();
@@ -166,6 +182,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
 
   Future<void> _reload() async {
     if (_busy) return;
+    _slideTimer?.cancel();
     setState(() {
       _busy = true;
       _error = null;
@@ -175,6 +192,8 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       _libItems.clear();
       _slides = null;
       _slideIndex = 0;
+      _pinned = false;
+      _pinnedItem = null;
     });
     _hero.value = null;
     _heroImage.value = null;
@@ -219,6 +238,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       if (!mounted) return;
       setState(() => _slides = pool.take(_slideCount).toList());
       _showSlide(immediate: true);
+      _scheduleSlide();
       for (final s in _slides!) {
         if (!mounted) return;
         try {
@@ -261,30 +281,91 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     if (mounted) setState(() => _rowsDone = true);
   }
 
+  /// What the poster shows: the resource the user pointed at while a card holds
+  /// the interaction, otherwise the carousel's current slide.
   FnOsItem? get _currentSlide {
+    if (_pinned) return _pinnedItem;
     final s = _slides;
     if (s == null || s.isEmpty) return null;
     return s[_slideIndex % s.length];
   }
 
-  /// Rotates the hero every [_slideInterval] whatever holds the focus; it only
-  /// pauses once the poster has been scrolled mostly away, or while the D-pad is
-  /// sitting on the hero (mouse hover must not stop it, that was the old bug).
-  void _autoAdvance() {
+  /// One-shot chain instead of a periodic timer: a pin cancels it, so the
+  /// countdown always restarts from the moment the poster is selected again.
+  void _scheduleSlide() {
+    _slideTimer?.cancel();
+    _slideTimer = Timer(_slideInterval, _onSlideTick);
+  }
+
+  /// Advances the carousel. It stays parked while a card is pinned (the user
+  /// picked it explicitly) and while the poster has been scrolled mostly away.
+  void _onSlideTick() {
     if (!mounted) return;
     final slides = _slides;
     if (slides == null || slides.length < 2) return;
-    if (_fullH > 0 && _scrollOffset.value > _fullH * 0.5) return;
-    if (_heroHolding && !InputMode.isPointer) return;
-    setState(() => _slideIndex = (_slideIndex + 1) % slides.length);
+    if (_fullH > 0 && _scrollOffset.value > _fullH * 0.5) {
+      _scheduleSlide();
+      return;
+    }
+    if (_pinned) return; // waiting for the poster area to be selected
+    _slideIndex = (_slideIndex + 1) % slides.length;
     _showSlide();
+    _scheduleSlide();
+  }
+
+  /// Keyboard focus on a card pins it, but only when the D-pad caused it: the
+  /// page hands the focus to the first card by itself while loading, and that
+  /// must not park the carousel before the user has touched anything.
+  void _pinFromKey(FnOsItem item) {
+    if (DateTime.now().millisecondsSinceEpoch - _lastKeyMs > 900) return;
+    _pinSlide(item);
+  }
+
+  /// A card was hovered or focused: show that resource and park the carousel.
+  void _pinSlide(FnOsItem item) {
+    _slideTimer?.cancel();
+    if (_pinned && _pinnedItem?.guid == item.guid) return;
+    _pinned = true;
+    _pinnedItem = item;
+    _showSlide(immediate: true);
+    unawaited(_ensureDetail(item));
+  }
+
+  /// The poster area is hovered or has the D-pad focus: restart the countdown,
+  /// so the carousel picks up with the next slide after [_slideInterval].
+  void _resumeFromHero() {
+    if (!_pinned) return;
+    _pinned = false;
+    _pinnedItem = null;
+    _scheduleSlide();
+  }
+
+  /// Details are fetched lazily: a card only carries the list payload, and the
+  /// overview/backdrop of a pinned resource is worth one request.
+  Future<void> _ensureDetail(FnOsItem item) async {
+    if (_details.containsKey(item.guid)) return;
+    try {
+      final raw = await _client.itemDetail(item.guid);
+      final map = raw is Map ? Map<String, Object?>.from(raw) : null;
+      if (map == null || !mounted) return;
+      _details[item.guid] = map;
+      if (_pinned && _pinnedItem?.guid == item.guid) _publish(_infoFor(item), immediate: true);
+    } catch (e) {
+      debugPrint('[fnos] pin detail ${item.guid}: $e');
+    }
   }
 
   void _stepSlide(int delta) {
     final s = _slides;
     if (s == null || s.length < 2) return;
-    setState(() => _slideIndex = (_slideIndex + delta + s.length) % s.length);
+    // Stepping by hand leaves the pinned resource and rejoins the carousel.
+    final shown = _currentSlide;
+    final from = shown == null ? _slideIndex : s.indexOf(shown);
+    _pinned = false;
+    _pinnedItem = null;
+    _slideIndex = ((from < 0 ? _slideIndex : from) + delta + s.length) % s.length;
     _showSlide(immediate: true);
+    _scheduleSlide();
   }
 
   /// Opens the detail page of the resource the poster is showing, exactly like
@@ -473,6 +554,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
               _logSkip(n);
               return false;
             }
+            _lastScrollMs = DateTime.now().millisecondsSinceEpoch;
             if ((_scrollOffset.value - n.metrics.pixels).abs() > 0.5) {
               _scrollOffset.value = n.metrics.pixels;
               _logScroll(n.metrics.pixels);
@@ -495,9 +577,13 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
                         title: l10n.continueWatching,
                         height: Zs.landscapeWidth * 0.5625 + 76,
                         itemCount: resume.length,
-                        itemBuilder: (context, i) => FnOsResumeCard(
-                          item: resume[i],
-                          width: Zs.landscapeWidth,
+                        itemBuilder: (context, i) => _pinArea(
+                          resume[i],
+                          FnOsResumeCard(
+                            item: resume[i],
+                            width: Zs.landscapeWidth,
+                            onFocus: () => _pinFromKey(resume[i]),
+                          ),
                         ),
                       ),
                     ),
@@ -534,7 +620,12 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
                         right: 0,
                         height: max(hitH, arrowsOn ? arrowTop + 52 : 0.0),
                         child: MouseRegion(
-                          onEnter: (_) => _heroHover.value = true,
+                          onEnter: (_) {
+                            _heroHover.value = true;
+                            // Selecting the poster restarts the carousel: ten
+                            // seconds later it moves on to the next slide.
+                            _resumeFromHero();
+                          },
                           onExit: (_) => _heroHover.value = false,
                           child: Stack(children: [
                             Positioned(left: 0, top: 0, right: 0, height: hitH, child: _heroPointer()),
@@ -632,6 +723,9 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
           onSelect: _openSlide,
           onFocusChange: (f) {
             _heroFocus.value = f;
+            // The D-pad landing on the poster restarts the carousel, exactly
+            // like hovering it: ten seconds later it advances to the next one.
+            if (f) _resumeFromHero();
             // The poster is not inside the scroll view, so nothing brings it
             // back into view when the D-pad returns to it from a row.
             if (f && !InputMode.isPointer) _scrollToPoster();
@@ -803,10 +897,35 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
         padding: const EdgeInsets.only(top: 12),
         child: items == null
             ? SkeletonBox(width: w, height: w * 1.5)
-            : FnOsPosterCard(item: items[i], width: w),
+            : _pinArea(
+                items[i],
+                FnOsPosterCard(item: items[i], width: w, onFocus: () => _pinFromKey(items[i])),
+              ),
       ),
     );
   }
+
+  /// Wraps a card so pointing at it also pins the poster — the mouse and the
+  /// D-pad must behave the same way here. `onHover` instead of `onEnter`: a
+  /// card that merely appears under a still pointer (page load, a row growing)
+  /// must not steal the poster, and the scroll guard keeps a wheel scroll from
+  /// flicking through the artwork.
+  Widget _pinArea(FnOsItem item, Widget child) {
+    return MouseRegion(
+      onHover: (_) {
+        if (DateTime.now().millisecondsSinceEpoch - _lastScrollMs < 350) return;
+        _pinSlide(item);
+      },
+      child: child,
+    );
+  }
+
+  /// Last page scroll tick, used by [_pinArea] to ignore hover noise.
+  int _lastScrollMs = 0;
+
+  /// Last key press seen by this page: a card only pins the poster when the
+  /// D-pad brought the focus there (see [_pinFromKey]).
+  int _lastKeyMs = 0;
 
   Widget _message(String text, String action, VoidCallback onSelect) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,

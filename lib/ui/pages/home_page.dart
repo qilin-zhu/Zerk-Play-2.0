@@ -83,6 +83,27 @@ class _HomePageState extends State<HomePage> {
   /// a click on the artwork can open it and Left/Right can walk the row.
   Object? _shown;
 
+  /// Hero carousel, same policy as the fnOS home: a random pool of the loaded
+  /// resources that advances every [_slideInterval]. Pointing at (or focusing)
+  /// a card pins that resource and parks the carousel; the poster being
+  /// hovered/focused resumes it. See [_focusData] and [_resumeFromHero].
+  List<(Object, HeroInfo)>? _slides;
+  int _slideIndex = 0;
+  Timer? _slideTimer;
+  bool _pinned = false;
+  Object? _pinnedItem;
+
+  static const _slideInterval = Duration(seconds: 10);
+  static const _slideCount = 8;
+
+  /// Last time the page scrolled, used to ignore hover events caused by cards
+  /// moving under a still pointer.
+  int _lastScrollMs = 0;
+
+  /// Last key press seen by this page: a card only pins the poster when the
+  /// D-pad brought the focus there (see [_focusKey]).
+  int _lastKeyMs = 0;
+
   double _fullH = 1;
   double _rowTop = 1;
   double _overlap = 0;
@@ -106,7 +127,6 @@ class _HomePageState extends State<HomePage> {
   static const _parallelRows = 3;
 
   final _resolved = <_Row, MixedItems>{};
-  bool _heroSet = false;
 
   bool _loaded = false;
   bool _showLoader = false;
@@ -125,7 +145,7 @@ class _HomePageState extends State<HomePage> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_rows == null) {
-      AppLog.write('[emby] home build poster-v1 (plate focus, hover arrows, hero anchor, up-fallback)');
+      AppLog.write('[emby] home build poster-v2 (random carousel, pin on card, resume on hero)');
       _rows = _buildRows(AppServicesScope.read(context));
       _allowFirstRows();
       _scroll.addListener(_onScroll);
@@ -220,11 +240,27 @@ class _HomePageState extends State<HomePage> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_watchKey);
+  }
+
+  /// Global watcher for the pin policy. A card's own key handler consumes the
+  /// arrows it uses, so the page-level handler never sees them; this one sees
+  /// every press and only records the time.
+  bool _watchKey(KeyEvent event) {
+    if (event is! KeyUpEvent) _lastKeyMs = DateTime.now().millisecondsSinceEpoch;
+    return false;
+  }
+
+  @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_watchKey);
     _services?.libraryChanged.removeListener(refresh);
     _services?.profiles.removeListener(_onProfile);
     _services?.removeListener(_onServices);
     _hero.dispose();
+    _slideTimer?.cancel();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _scrollOffset.dispose();
@@ -235,6 +271,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   void refresh() {
+    _slideTimer?.cancel();
+    _pinned = false;
+    _pinnedItem = null;
+    _slides = null;
+    _slideIndex = 0;
     setState(() {
       _data.clear();
       _taste = null;
@@ -461,6 +502,7 @@ class _HomePageState extends State<HomePage> {
           var items = await row.load();
           if (row.recommends) items = [for (final i in items) if (i.keptInRecommendations) i];
           _resolved[row] = items;
+          _startCarousel();
           return items;
         } finally {
           _loading--;
@@ -468,14 +510,100 @@ class _HomePageState extends State<HomePage> {
         }
       });
 
-  void _focusData(Object data, {bool immediate = false}) {
-    _shown = data;
+  HeroInfo _heroInfoOf(Object data) {
     final l10n = context.l10n;
-    _hero.set(
-        data is EmbyItem
-            ? HeroInfo.fromItem(l10n, AppServicesScope.read(context), data)
-            : HeroInfo.fromRequest(l10n, data as SeerrMedia),
-        immediate: immediate);
+    return data is EmbyItem
+        ? HeroInfo.fromItem(l10n, AppServicesScope.read(context), data)
+        : HeroInfo.fromRequest(l10n, data as SeerrMedia);
+  }
+
+  void _publishItem(Object data, HeroInfo info, {bool immediate = false}) {
+    _shown = data;
+    _hero.set(info, immediate: immediate);
+  }
+
+  /// A card was hovered or focused: show that resource and park the carousel.
+  void _focusData(Object data, {bool immediate = false}) {
+    if (_pinned && identical(_pinnedItem, data)) return;
+    _slideTimer?.cancel();
+    _pinned = true;
+    _pinnedItem = data;
+    final info = _heroInfoOf(data);
+    _publishItem(data, info, immediate: immediate);
+  }
+
+  /// Builds the carousel pool from what the rows have loaded so far, shuffled
+  /// once so every visit starts on a different resource. Called after each row
+  /// resolves: the first two items are enough, later rows are ignored.
+  void _startCarousel() {
+    if (!mounted) return;
+    if (_slides != null) return;
+    final rows = _rows;
+    if (rows == null) return;
+    final seen = <String>{};
+    final pool = <(Object, HeroInfo)>[];
+    for (final row in rows) {
+      if (row.kind == _Kind.moods) continue;
+      for (final item in _resolved[row] ?? const <Object>[]) {
+        final info = _heroInfoOf(item);
+        if (!seen.add(info.key)) continue;
+        pool.add((item, info));
+      }
+    }
+    if (pool.length < 2) return;
+    pool.shuffle(Random());
+    _slides = pool.take(_slideCount).toList();
+    _slideIndex = 0;
+    final (data, info) = _slides!.first;
+    _publishItem(data, info, immediate: true);
+    _scheduleSlide();
+  }
+
+  void _scheduleSlide() {
+    _slideTimer?.cancel();
+    _slideTimer = Timer(_slideInterval, _onSlideTick);
+  }
+
+  void _onSlideTick() {
+    if (!mounted) return;
+    final slides = _slides;
+    if (slides == null || slides.length < 2) return;
+    // Same policy as the fnOS home: no rotation while the poster is mostly
+    // scrolled away, and none while the user is browsing a card.
+    if (_fullH > 0 && _scrollOffset.value > _fullH * 0.5) {
+      _scheduleSlide();
+      return;
+    }
+    if (_pinned) return;
+    _slideIndex = (_slideIndex + 1) % slides.length;
+    final (data, info) = slides[_slideIndex];
+    _publishItem(data, info);
+    _scheduleSlide();
+  }
+
+  /// Mouse hover on a card pins the poster, unless the page is scrolling: a
+  /// card sliding under a still pointer must not flicker the artwork.
+  void _hoverCard(Object data) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastScrollMs < 350) return;
+    _focusData(data);
+  }
+
+  /// Keyboard focus on a card pins it, but only when the D-pad caused it: the
+  /// page puts the focus on the first card by itself right after loading, and
+  /// that must not park the carousel before the user has touched anything.
+  void _focusKey(Object data) {
+    if (DateTime.now().millisecondsSinceEpoch - _lastKeyMs > 900) return;
+    _focusData(data);
+  }
+
+  /// The poster area is hovered or has the D-pad focus: after ten seconds the
+  /// carousel takes over again and moves on to the next resource.
+  void _resumeFromHero() {
+    if (!_pinned) return;
+    _pinned = false;
+    _pinnedItem = null;
+    _scheduleSlide();
   }
 
   Future<void> _play(EmbyItem item) => playItem(context, item);
@@ -534,6 +662,7 @@ class _HomePageState extends State<HomePage> {
               final ad = n.metrics.axisDirection;
               final vertical = ad == AxisDirection.down || ad == AxisDirection.up;
               if (!vertical || n.depth != 0) return false;
+              _lastScrollMs = DateTime.now().millisecondsSinceEpoch;
               if ((_scrollOffset.value - n.metrics.pixels).abs() > 0.5) {
                 _scrollOffset.value = n.metrics.pixels;
               }
@@ -667,7 +796,12 @@ class _HomePageState extends State<HomePage> {
           right: 0,
           height: max(hitH, arrowsOn ? arrowTop + 52 : 0.0),
           child: MouseRegion(
-            onEnter: (_) => _heroHover.value = true,
+            onEnter: (_) {
+              _heroHover.value = true;
+              // Selecting the poster restarts the carousel: ten seconds later
+              // it moves on to the next resource.
+              _resumeFromHero();
+            },
             onExit: (_) => _heroHover.value = false,
             child: Stack(children: [
               Positioned(left: 0, top: 0, right: 0, height: hitH, child: _heroPointer()),
@@ -715,6 +849,9 @@ class _HomePageState extends State<HomePage> {
           onSelect: _openShown,
           onFocusChange: (f) {
             _heroFocus.value = f;
+            // The D-pad landing on the poster restarts the carousel, exactly
+            // like hovering it.
+            if (f) _resumeFromHero();
             if (f && !InputMode.isPointer) _scrollToPoster();
           },
           onKey: (event) {
@@ -807,26 +944,20 @@ class _HomePageState extends State<HomePage> {
     _scroll.jumpTo((p.pixels + e.scrollDelta.dy).clamp(0.0, p.maxScrollExtent));
   }
 
-  /// Items Left/Right walk through: the first row that has something to show.
-  List<Object> _arrowSlides(List<_Row> rows) {
-    for (final r in rows) {
-      if (r.kind == _Kind.moods || !_allowed.contains(r)) continue;
-      final items = _resolved[r];
-      if (items == null || items.isEmpty) continue;
-      return items.take(24).toList();
-    }
-    return const [];
-  }
-
+  /// Left/Right walk the carousel pool, rolling forward from whatever is on
+  /// screen; a pinned resource that is not part of the pool starts the walk
+  /// from the slide behind it.
   void _stepSlide(int delta) {
-    final rows = _rows;
-    if (rows == null) return;
-    final slides = _arrowSlides(rows);
-    if (slides.length < 2) return;
-    final current = _shown == null ? -1 : slides.indexOf(_shown!);
-    final from = current < 0 ? 0 : current;
-    final next = ((from + delta) % slides.length + slides.length) % slides.length;
-    _focusData(slides[next]);
+    final slides = _slides;
+    if (slides == null || slides.length < 2) return;
+    final current = slides.indexWhere((s) => identical(s.$1, _shown));
+    final from = current < 0 ? _slideIndex : current;
+    _slideIndex = ((from + delta) % slides.length + slides.length) % slides.length;
+    _pinned = false;
+    _pinnedItem = null;
+    final (data, info) = slides[_slideIndex];
+    _publishItem(data, info, immediate: true);
+    _scheduleSlide();
   }
 
   void _openShown() {
@@ -861,14 +992,6 @@ class _HomePageState extends State<HomePage> {
         if (snap.hasError) debugPrint('[home] ${row.title(context.l10n)}: ${snap.error}');
         if (items.isEmpty) return const SizedBox.shrink();
 
-        if (!_heroSet) {
-          _heroSet = true;
-          final firstItem = items.first;
-          scheduleMicrotask(() {
-            if (mounted) _focusData(firstItem, immediate: true);
-          });
-        }
-
         return Padding(
           padding: const EdgeInsets.only(bottom: Zs.rowGap),
           child: MediaRow(
@@ -881,9 +1004,15 @@ class _HomePageState extends State<HomePage> {
               _ => Zs.cardGap,
             },
             itemCount: items.length,
-            itemBuilder: (context, i) => Padding(
-              padding: const EdgeInsets.only(top: 14),
-              child: _card(row, items[i], rank: i + 1, autofocus: first && i == 0),
+            itemBuilder: (context, i) => MouseRegion(
+              // Pointing at a card must pin the poster exactly like focusing it
+              // with the D-pad does. onHover (not onEnter): a card that merely
+              // appears under a still pointer must not steal the poster.
+              onHover: (_) => _hoverCard(items[i]),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: _card(row, items[i], rank: i + 1, autofocus: first && i == 0),
+              ),
             ),
           ),
         );
@@ -893,7 +1022,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _card(_Row row, Object data, {required int rank, required bool autofocus}) {
     if (row.kind == _Kind.collections && data is EmbyItem) {
-      return CollectionCard(item: data, autofocus: autofocus, onFocus: () => _focusData(data), onSelect: () => openItem(context, data));
+      return CollectionCard(item: data, autofocus: autofocus, onFocus: () => _focusKey(data), onSelect: () => openItem(context, data));
     }
     if (row.kind == _Kind.continueWatching && data is EmbyItem) {
       final item = data;
@@ -910,7 +1039,7 @@ class _HomePageState extends State<HomePage> {
                 ? context.l10n.timeLeft(remaining)
                 : item.productionYear?.toString(),
         preferEpisodeStill: false,
-        onFocus: () => _focusData(item),
+        onFocus: () => _focusKey(item),
         onSelect: () => openItem(context, item),
         onMenu: () => _play(item),
         onPlay: () => _play(item),
@@ -922,12 +1051,12 @@ class _HomePageState extends State<HomePage> {
         autofocus: autofocus,
         title: data.seriesName ?? data.name,
         subtitle: [data.episodeCode, data.name].whereType<String>().join('  '),
-        onFocus: () => _focusData(data),
+        onFocus: () => _focusKey(data),
         onSelect: () => openItem(context, data),
         onPlay: () => _play(data),
       );
     }
-    return mixedCard(context, data, style: row.style, rank: rank, autofocus: autofocus, onFocus: () => _focusData(data));
+    return mixedCard(context, data, style: row.style, rank: rank, autofocus: autofocus, onFocus: () => _focusKey(data));
   }
 }
 
