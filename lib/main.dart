@@ -26,6 +26,7 @@ import 'ui/focus/focus_zone.dart';
 import 'ui/pages/onboarding_page.dart';
 import 'ui/pages/sign_in_page.dart';
 import 'ui/shell/shell.dart';
+import 'ui/widgets/window_chrome.dart';
 import 'ui/theme/tokens.dart';
 
 Future<void> main(List<String> args) async {
@@ -66,8 +67,15 @@ Future<void> _initWindow() async {
       minimumSize: Size(960, 540),
       center: true,
       backgroundColor: Zc.background,
+      // Frameless: no OS title bar and no system buttons. The shell draws its
+      // own capsule and a drag strip along the top edge. `hidden` only drops
+      // WS_CAPTION, so the window stays resizable from its edges.
+      titleBarStyle: TitleBarStyle.hidden,
+      windowButtonVisibility: false,
     ),
     () async {
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden, windowButtonVisibility: false);
+      await windowManager.setResizable(true);
       await windowManager.show();
       await windowManager.focus();
     },
@@ -162,7 +170,20 @@ class _ZerkAppState extends State<ZerkApp> {
             bindings: {
               const SingleActivator(LogicalKeyboardKey.f11): () => unawaited(NativeWindow.toggleFullScreen()),
             },
-            child: BackKeys(navigatorKey: _navigator, child: ZoneNavigation(child: child!)),
+            child: BackKeys(
+              navigatorKey: _navigator,
+              child: ZoneNavigation(
+                // The window is frameless, so the drag strip and the
+                // minimise/close capsule are painted above every route: the
+                // sign-in and onboarding screens are not inside the shell.
+                child: Stack(
+                  children: [
+                    Positioned.fill(child: child ?? const SizedBox.shrink()),
+                    const Positioned.fill(child: WindowChromeLayer()),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),
