@@ -35,6 +35,80 @@ final class HubFeatures {
   final bool redownload;
 }
 
+/// One server a code opens. The first one of [HubConfig.servers] is the primary:
+/// the client logs into it and takes every non-server setting from it.
+final class HubServer {
+  const HubServer({
+    required this.name,
+    required this.url,
+    required this.kind,
+    this.username = '',
+    this.password = '',
+    this.primary = false,
+  });
+
+  factory HubServer.fromJson(Object? raw) {
+    final j = raw is Map ? raw : const {};
+    return HubServer(
+      name: '${j['name'] ?? ''}',
+      url: '${j['url'] ?? ''}',
+      kind: ServerKind.parse(j['kind'] as String?),
+      username: '${j['username'] ?? ''}',
+      password: '${j['password'] ?? ''}',
+      primary: j['primary'] == true,
+    );
+  }
+
+  final String name;
+  final String url;
+  final ServerKind kind;
+  final String username;
+  final String password;
+  final bool primary;
+
+  bool get usable => url.trim().isNotEmpty;
+
+  /// The hub only sends credentials when the owner chose to store them.
+  bool get hasLogin => username.trim().isNotEmpty && password.isNotEmpty;
+}
+
+final class HubDanmakuSource {
+  const HubDanmakuSource({this.name = '', this.server = '', this.appId = '', this.appSecret = ''});
+
+  factory HubDanmakuSource.fromJson(Object? raw) {
+    final j = raw is Map ? raw : const {};
+    return HubDanmakuSource(
+      name: '${j['name'] ?? ''}',
+      server: '${j['server'] ?? ''}',
+      appId: '${j['appId'] ?? ''}',
+      appSecret: '${j['appSecret'] ?? ''}',
+    );
+  }
+
+  final String name;
+  final String server;
+  final String appId;
+  final String appSecret;
+}
+
+final class HubDanmaku {
+  const HubDanmaku({this.enabled = false, this.sources = const []});
+
+  factory HubDanmaku.fromJson(Object? raw) {
+    final j = raw is Map ? raw : const {};
+    return HubDanmaku(
+      enabled: j['enabled'] == true,
+      sources: [
+        for (final e in (j['sources'] as List? ?? const []))
+          if (e is Map) HubDanmakuSource.fromJson(e),
+      ],
+    );
+  }
+
+  final bool enabled;
+  final List<HubDanmakuSource> sources;
+}
+
 final class HubConfig {
   HubConfig(this.json)
       : serverName = (json['server'] as Map?)?['name'] as String? ?? '',
@@ -51,6 +125,31 @@ final class HubConfig {
   final Uri? base;
   final HubFeatures features;
   final Duration refreshAfter;
+
+  /// Every server the code opens, primary first. A hub that only knows about
+  /// one server still answers with `servers`, but older ones send `server`
+  /// alone, so the fallback keeps them working.
+  late final List<HubServer> servers = _readServers();
+
+  /// Comment sources the owner attached to the primary server.
+  late final HubDanmaku danmaku = HubDanmaku.fromJson(json['danmaku']);
+
+  HubServer? get primary => servers.isEmpty ? null : servers.first;
+
+  List<HubServer> _readServers() {
+    final list = <HubServer>[
+      for (final e in (json['servers'] as List? ?? const []))
+        if (e is Map) HubServer.fromJson(e),
+    ];
+    final usable = [
+      for (final s in list)
+        if (s.usable) s,
+    ];
+    if (usable.isEmpty && serverUrl.trim().isNotEmpty) {
+      usable.add(HubServer(name: serverName, url: serverUrl, kind: serverKind, primary: true));
+    }
+    return List.unmodifiable(usable);
+  }
 
   String _text(String key) => json[key] is String ? json[key] as String : '';
 
@@ -186,9 +285,10 @@ abstract final class HubLink {
       throw HubLinkException('${map['code'] ?? 'http-${res.statusCode}'}', '${map['message'] ?? 'The hub answered ${res.statusCode}.'}');
     }
     final config = HubConfig(json);
-    if (config.serverUrl.isEmpty || config.base == null) {
+    if (config.servers.isEmpty || config.base == null) {
       throw const HubLinkException('bad-config', 'The hub sent an incomplete setup.');
     }
+    debugPrint('[hub] link v2: ${config.servers.length} server(s), danmaku ${config.danmaku.sources.length}');
     _config = config;
     _code = code;
     _hub = target;
@@ -197,10 +297,34 @@ abstract final class HubLink {
       'code': code,
       'hub': target,
       'linkedAt': _linkedAt!.toIso8601String(),
-      'config': json,
+      'config': _stripAccounts(json),
     }));
     changed.value++;
     return config;
+  }
+
+  /// The cached payload never keeps the account the hub sent. It is already
+  /// stored by the sidebar's server list (obfuscated), and a plaintext password
+  /// in shared_preferences would be the weakest copy on the device.
+  static Map<String, Object?> _stripAccounts(Map<String, Object?> raw) {
+    final out = <String, Object?>{};
+    raw.forEach((k, v) => out[k] = v);
+    final list = raw['servers'];
+    if (list is List) {
+      out['servers'] = [for (final e in list) if (e is Map) _stripAccount(e) else e];
+    }
+    final single = raw['server'];
+    if (single is Map) out['server'] = _stripAccount(single);
+    return out;
+  }
+
+  static Map<String, Object?> _stripAccount(Map<dynamic, dynamic> src) {
+    final out = <String, Object?>{};
+    src.forEach((k, v) {
+      final key = '$k';
+      if (key != 'username' && key != 'password') out[key] = v;
+    });
+    return out;
   }
 
   static Future<HubConfig?> refresh() async {

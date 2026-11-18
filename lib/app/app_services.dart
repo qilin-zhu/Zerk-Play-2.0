@@ -20,6 +20,8 @@ import '../data/emby_live_tv.dart';
 import '../data/title_ratings.dart';
 import '../data/xtream/live_catalog.dart';
 import '../data/xtream/xtream.dart';
+import '../playback/danmaku/danmaku_settings.dart';
+import '../playback/danmaku/danmaku_source.dart';
 import '../playback/emby_playback_api.dart';
 import '../playback/sync/watch_together.dart';
 import '../services/janus/janus_service.dart';
@@ -294,14 +296,64 @@ final class AppServices extends ChangeNotifier {
   Future<HubConfig> linkHub(String code, {String? hub}) async {
     final config = await HubLink.redeem(code, hub: hub);
     await updateSettings(config.applyTo(_settings));
+    await _applyHubDanmaku(config);
+    await _rememberHubServers(config);
     return config;
+  }
+
+  /// The hub may carry comment sources for its primary server. They are appended
+  /// behind the built-in provider, so a source this device already had keeps its
+  /// priority; when the hub sends none, local sources are left untouched.
+  Future<void> _applyHubDanmaku(HubConfig config) async {
+    final hub = config.danmaku;
+    if (hub.sources.isEmpty) return;
+    try {
+      final current = await DanmakuSettings.load();
+      final added = [
+        for (final s in hub.sources)
+          if (s.server.trim().isNotEmpty)
+            DanmakuSource(
+              id: 'hub:${s.server.trim()}',
+              name: s.name.trim(),
+              server: s.server.trim(),
+              appId: s.appId.trim(),
+              appSecret: s.appSecret.trim(),
+            ),
+      ];
+      if (added.isEmpty) return;
+      final next = current.copyWith(
+        enabled: hub.enabled || current.enabled,
+        sources: [
+          for (final s in current.sources)
+            if (s.builtIn) s,
+          ...added,
+        ],
+      );
+      await next.save();
+      debugPrint('[hub] danmaku sources: ${added.length}');
+    } catch (e) {
+      debugPrint('[hub] danmaku apply: $e');
+    }
+  }
+
+  /// A code can open several servers, so the sidebar gets them all. Servers
+  /// without an account are skipped: an entry that cannot sign in is useless.
+  Future<void> _rememberHubServers(HubConfig config) async {
+    for (final s in config.servers) {
+      if (!s.hasLogin || !s.usable) continue;
+      await servers.remember(url: s.url, kind: s.kind, username: s.username, password: s.password, name: s.name);
+    }
   }
 
   Future<void> refreshHub() async {
     final linkedServer = HubLink.config?.serverUrl;
     try {
       final config = await HubLink.refresh();
-      if (config != null) await updateSettings(config.applyTo(_settings));
+      if (config != null) {
+        await updateSettings(config.applyTo(_settings));
+        await _applyHubDanmaku(config);
+        await _rememberHubServers(config);
+      }
     } on HubLinkException catch (e) {
       if (!e.dropsLink) return;
       debugPrint('[hub] link dropped: ${e.code}');

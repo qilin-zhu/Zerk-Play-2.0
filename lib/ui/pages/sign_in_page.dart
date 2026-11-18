@@ -95,8 +95,21 @@ class _SignInPageState extends State<SignInPage> {
   Future<void> _redeem() => _run(() async {
         final code = _code.text.trim();
         if (code.isEmpty) return;
-        await AppServicesScope.read(context).linkHub(code, hub: _hub.text);
+        final services = AppServicesScope.read(context);
+        final config = await services.linkHub(code, hub: _hub.text);
         if (!mounted) return;
+        final primary = config.primary;
+        if (primary != null && primary.hasLogin) {
+          // The owner stored an account for this server: the code is enough, go
+          // straight in instead of asking for a password the hub already knows.
+          _user.text = primary.username;
+          _pass.text = primary.password;
+          UiSounds.play(UiSound.select);
+          setState(() {});
+          await services.signIn(
+              server: primary.url, kind: primary.kind, username: primary.username, password: primary.password);
+          return;
+        }
         UiSounds.play(UiSound.select);
         setState(() {});
         WidgetsBinding.instance.addPostFrameCallback((_) {
