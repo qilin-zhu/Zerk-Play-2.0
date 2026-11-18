@@ -67,9 +67,9 @@ Future<void> _initWindow() async {
       minimumSize: Size(960, 540),
       center: true,
       backgroundColor: Zc.background,
-      // Frameless: no OS title bar and no system buttons. The shell draws its
-      // own capsule and a drag strip along the top edge. `hidden` only drops
-      // WS_CAPTION, so the window stays resizable from its edges.
+      // Frameless: no OS title bar and no system buttons. WindowChromeLayer
+      // draws a drag strip and the capsule on top of every route. `hidden`
+      // only drops WS_CAPTION, so the window stays resizable from its edges.
       titleBarStyle: TitleBarStyle.hidden,
       windowButtonVisibility: false,
     ),

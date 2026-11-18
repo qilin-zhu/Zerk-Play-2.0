@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:math';
 
+import 'package:flutter/gestures.dart' show PointerScrollEvent, PointerSignalEvent;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/app_services.dart';
 import '../../core/emby/models/emby_item.dart';
@@ -12,8 +15,10 @@ import '../../data/title_tags.dart';
 import '../../core/log/app_log.dart';
 import '../../l10n/l10n.dart';
 import '../core/artwork.dart';
+import '../core/input_mode.dart';
 import '../core/playback_launcher.dart';
 import '../focus/focus_zone.dart';
+import '../focus/tv_focusable.dart';
 import '../theme/tokens.dart';
 import '../widgets/backdrop.dart';
 import '../widgets/cards.dart';
@@ -59,7 +64,40 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final _hero = Debounced<HeroInfo?>(null);
-  final _scroll = RevealController(mode: RevealMode.anchored, anchor: 64);
+
+  /// Same policy as the fnOS home: a sideways move inside a row must not touch
+  /// the page, and a row that is already (mostly) visible must not either.
+  final _scroll = RevealController(margin: 0, keepVisible: true);
+
+  /// Vertical offset of the page only; row notifications are filtered out.
+  final _scrollOffset = ValueNotifier<double>(0);
+
+  /// Keyboard target of the hero, plus the two flags that drive its plate and
+  /// the hover arrows.
+  final _heroNode = FocusNode(debugLabel: 'emby-hero');
+  final _heroFocus = ValueNotifier<bool>(false);
+  final _heroHover = ValueNotifier<bool>(false);
+  late final Listenable _arrows = Listenable.merge([_heroFocus, _heroHover]);
+
+  /// What the poster is showing right now (an [EmbyItem] or a [SeerrMedia]), so
+  /// a click on the artwork can open it and Left/Right can walk the row.
+  Object? _shown;
+
+  double _fullH = 1;
+  double _rowTop = 1;
+  double _overlap = 0;
+
+  /// Title block of a row: 18 px bottom padding + the text line.
+  static const _rowTitleH = 48.0;
+  static const _maxFade = 320.0;
+  static const _heroFocusH = 44.0;
+  static const _arrowLeft = 88.0;
+  static const _bottomFade = LinearGradient(
+    begin: Alignment.bottomCenter,
+    end: Alignment.topCenter,
+    stops: [0.0, 0.35, 0.7, 1.0],
+    colors: [Zc.background, Color(0xCC0B0B12), Color(0x550B0B12), Color(0x000B0B12)],
+  );
   List<_Row>? _rows;
   final _data = <_Row, Future<MixedItems>>{};
 
@@ -87,6 +125,7 @@ class _HomePageState extends State<HomePage> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_rows == null) {
+      AppLog.write('[emby] home build poster-v1 (plate focus, hover arrows, hero anchor, up-fallback)');
       _rows = _buildRows(AppServicesScope.read(context));
       _allowFirstRows();
       _scroll.addListener(_onScroll);
@@ -188,6 +227,10 @@ class _HomePageState extends State<HomePage> {
     _hero.dispose();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
+    _scrollOffset.dispose();
+    _heroNode.dispose();
+    _heroFocus.dispose();
+    _heroHover.dispose();
     super.dispose();
   }
 
@@ -426,6 +469,7 @@ class _HomePageState extends State<HomePage> {
       });
 
   void _focusData(Object data, {bool immediate = false}) {
+    _shown = data;
     final l10n = context.l10n;
     _hero.set(
         data is EmbyItem
@@ -439,71 +483,355 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final rows = _rows!;
-    final height = MediaQuery.sizeOf(context).height;
-    final heroHeight = height * 0.46;
-    return Stack(children: [
-      Positioned.fill(
-        child: ValueListenableBuilder(
-          valueListenable: _hero,
-          builder: (_, info, _) => Backdrop(url: info?.backdrop),
-        ),
-      ),
-      Positioned(
-        left: contentLeft,
-        top: 0,
-        height: heroHeight,
-        right: 600,
-        child: Align(
-          alignment: Alignment.bottomLeft,
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 28),
-            child: ValueListenableBuilder(valueListenable: _hero, builder: (_, info, _) => HeroPanel(info: info)),
+    final size = MediaQuery.sizeOf(context);
+    // Same stage as the fnOS home: a full-bleed 16:9 poster pinned to the top,
+    // cropped from the bottom as the page scrolls, with the first row peeking
+    // over its lower edge.
+    final fullW = size.width.clamp(320.0, 4096.0);
+    final fullH = fullW * 9 / 16;
+    _fullH = fullH;
+    _rowTop = (size.height - _rowPeek(rows)).clamp(0.0, fullH);
+    _overlap = (fullH - _rowTop).clamp(0.0, fullH);
+
+    final posterImage = ValueListenableBuilder<HeroInfo?>(
+      valueListenable: _hero,
+      builder: (_, info, _) => Backdrop(url: info?.backdrop, scrims: false),
+    );
+    final posterPanel = ValueListenableBuilder<HeroInfo?>(
+      valueListenable: _hero,
+      builder: (_, info, _) => HeroPanel(info: info),
+    );
+
+    return Focus(
+      // Up from the topmost row must always reach the poster; see [_pageKeys].
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _pageKeys,
+      child: Stack(children: [
+        // Poster layer (bottom): pinned and full-bleed.
+        Positioned(
+          left: 0,
+          top: 0,
+          right: 0,
+          child: ValueListenableBuilder<double>(
+            valueListenable: _scrollOffset,
+            builder: (context, offset, _) {
+              final h = (fullH - offset).clamp(0.0, fullH);
+              if (h <= 0.5) return const SizedBox.shrink();
+              return _heroPoster(h, (offset / fullH).clamp(0.0, 1.0), posterImage, posterPanel);
+            },
           ),
         ),
-      ),
-      Positioned.fill(
-        top: heroHeight,
-        child: CardTrailers(
-          child: RowsScrollView(
-            controller: _scroll,
-            top: 24,
-            children: [for (final (i, row) in rows.indexed) _buildRow(row, first: i == 0)],
+        // Content layer (top): transparent, so the wheel scrolls from anywhere
+        // and the rows paint over the poster's bottom edge.
+        Positioned.fill(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (n) {
+              // Every row is a horizontal ListView nested inside this page's
+              // viewport, so its notifications bubble up here too. Feeding
+              // their horizontal pixels into the poster offset would shove the
+              // artwork around on a plain Left/Right press.
+              final ad = n.metrics.axisDirection;
+              final vertical = ad == AxisDirection.down || ad == AxisDirection.up;
+              if (!vertical || n.depth != 0) return false;
+              if ((_scrollOffset.value - n.metrics.pixels).abs() > 0.5) {
+                _scrollOffset.value = n.metrics.pixels;
+              }
+              return false;
+            },
+            child: Listener(
+              onPointerSignal: _onPointerSignal,
+              child: Stack(fit: StackFit.expand, children: [
+                CardTrailers(
+                  child: RowsScrollView(
+                    controller: _scroll,
+                    top: _rowTop,
+                    children: [for (final (i, row) in rows.indexed) _buildRow(row, first: i == 0)],
+                  ),
+                ),
+                ValueListenableBuilder<double>(
+                  valueListenable: _scrollOffset,
+                  builder: (context, offset, _) => _heroOverlay(fullH, offset),
+                ),
+              ]),
+            ),
           ),
         ),
-      ),
-      Positioned(
-        left: 0,
-        right: 0,
-        top: heroHeight,
-        height: height * 0.035,
-        child: const IgnorePointer(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0xF00B0B12), Color(0x000B0B12)],
+        if (_showLoader && AppServicesScope.of(context).isSignedIn)
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: _loaded,
+              child: AnimatedOpacity(
+                opacity: _loaded ? 0 : 1,
+                duration: const Duration(milliseconds: 900),
+                curve: Curves.easeInOut,
+                onEnd: () {
+                  if (_loaded && mounted) setState(() => _showLoader = false);
+                },
+                child: const CinemaLoader(),
               ),
             ),
           ),
-        ),
-      ),
-      if (_showLoader && AppServicesScope.of(context).isSignedIn)
-        Positioned.fill(
-          child: IgnorePointer(
-            ignoring: _loaded,
-            child: AnimatedOpacity(
-              opacity: _loaded ? 0 : 1,
-              duration: const Duration(milliseconds: 900),
-              curve: Curves.easeInOut,
-              onEnd: () {
-                if (_loaded && mounted) setState(() => _showLoader = false);
-              },
-              child: const CinemaLoader(),
+      ]),
+    );
+  }
+
+  /// Height taken by the first row that actually renders: its title plus the
+  /// card block. The rows start exactly that far from the bottom edge, so the
+  /// very first row is always fully visible instead of being clipped.
+  double _rowPeek(List<_Row> rows) {
+    _Row? first;
+    for (final r in rows) {
+      if (r.kind == _Kind.moods || !_allowed.contains(r)) continue;
+      final items = _resolved[r];
+      if (items == null || items.isNotEmpty) {
+        first = r;
+        break;
+      }
+    }
+    if (first == null) return 0;
+    final areaH = switch (first.kind) {
+      _Kind.collections => 560 * 0.42 + 44,
+      _Kind.continueWatching => cardAreaHeight(CardStyle.landscape),
+      _ => cardAreaHeight(first.style),
+    };
+    return _rowTitleH + areaH + Zs.rowGap;
+  }
+
+  /// Poster composition: the artwork is laid out at the full height and
+  /// top-anchored, so the clip crops it from the bottom; a gradient dissolves
+  /// the cut edge, and the info card sits on the artwork's bottom-left.
+  Widget _heroPoster(double h, double c, Widget image, Widget panel) {
+    final fadeOut = (1 - c * 1.7).clamp(0.0, 1.0);
+    final fadeH = min(_maxFade, h * 0.62);
+    return SizedBox(
+      height: h,
+      child: ClipRect(
+        child: Stack(fit: StackFit.expand, children: [
+          Positioned(left: 0, right: 0, top: 0, height: _fullH, child: image),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: fadeH,
+            child: const IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(gradient: _bottomFade))),
+          ),
+          Positioned(
+            left: contentLeft - 20,
+            right: 220,
+            bottom: _overlap + 22,
+            child: Opacity(
+              opacity: fadeOut,
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: IgnorePointer(
+                  // No ring: the translucent plate behind the text is the
+                  // only focus indicator, exactly like the fnOS home.
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _heroFocus,
+                    builder: (_, focused, child) => AnimatedContainer(
+                      duration: Zm.fast,
+                      curve: Zm.curve,
+                      padding: const EdgeInsets.fromLTRB(20, 14, 24, 10),
+                      decoration: BoxDecoration(
+                        color: focused ? const Color(0x59000000) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: child,
+                    ),
+                    child: panel,
+                  ),
+                ),
+              ),
             ),
           ),
+        ]),
+      ),
+    );
+  }
+
+  /// Click/drag layer over the artwork, the hover arrows and the keyboard
+  /// anchor. Rebuilt on every scroll tick, so it stays cheap.
+  Widget _heroOverlay(double fullH, double offset) {
+    final h = (fullH - offset).clamp(0.0, fullH);
+    final c = (offset / fullH).clamp(0.0, 1.0);
+    final hitH = (_rowTop - offset).clamp(0.0, h);
+    final arrowsOn = h > 120 && c < 0.6;
+    final panelBottom = h - _overlap - 22;
+    final arrowTop = min(h * 0.40, panelBottom - 175).clamp(16.0, max(16.0, h - 52)).toDouble();
+    return Stack(children: [
+      if (hitH > 24)
+        Positioned(
+          left: 0,
+          top: 0,
+          right: 0,
+          height: max(hitH, arrowsOn ? arrowTop + 52 : 0.0),
+          child: MouseRegion(
+            onEnter: (_) => _heroHover.value = true,
+            onExit: (_) => _heroHover.value = false,
+            child: Stack(children: [
+              Positioned(left: 0, top: 0, right: 0, height: hitH, child: _heroPointer()),
+              if (arrowsOn) ..._arrowLayer(arrowTop),
+            ]),
+          ),
         ),
+      // Always mounted: the click layer disappears once the poster scrolls
+      // away, and without this the hero zone would have no focus node at all.
+      Positioned(
+        left: 0,
+        top: 0,
+        right: 0,
+        height: max(hitH, _heroFocusH),
+        child: _heroFocusTarget(),
+      ),
     ]);
+  }
+
+  /// Mouse-only layer over the poster: a click opens the shown resource and a
+  /// drag scrolls the page (the scroll view is a sibling underneath).
+  Widget _heroPointer() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _openShown,
+      onVerticalDragUpdate: (d) {
+        if (!_scroll.hasClients) return;
+        final p = _scroll.position;
+        _scroll.jumpTo((p.pixels - d.delta.dy).clamp(0.0, p.maxScrollExtent));
+      },
+      child: const SizedBox.expand(),
+    );
+  }
+
+  /// Keyboard target of the hero. Mounted for the whole life of the page so Up
+  /// can return to the poster at any scroll offset; pointer events are ignored
+  /// so it never steals a click from the cards.
+  Widget _heroFocusTarget() {
+    return IgnorePointer(
+      child: FocusZone(
+        debugLabel: 'emby-hero',
+        child: TvFocusable(
+          focusNode: _heroNode,
+          reveal: false,
+          onSelect: _openShown,
+          onFocusChange: (f) {
+            _heroFocus.value = f;
+            if (f && !InputMode.isPointer) _scrollToPoster();
+          },
+          onKey: (event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+            final key = event.logicalKey;
+            if (key == LogicalKeyboardKey.arrowDown) {
+              ZoneNavigator.move(TraversalDirection.down);
+              return KeyEventResult.handled;
+            }
+            // Left/Right switch what the poster shows, exactly like fnOS; the
+            // arrows are mouse-only.
+            if (key == LogicalKeyboardKey.arrowLeft) {
+              _stepSlide(-1);
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.arrowRight) {
+              _stepSlide(1);
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          builder: (context, focused) => const SizedBox.expand(),
+        ),
+      ),
+    );
+  }
+
+  /// Prev/next circles. Mouse only: no focus node, no zone, and hidden until
+  /// the poster is hovered or selected with the D-pad.
+  List<Widget> _arrowLayer(double top) {
+    return [
+      Positioned(
+        left: _arrowLeft,
+        right: 16,
+        top: top,
+        height: 52,
+        child: AnimatedBuilder(
+          animation: _arrows,
+          builder: (context, child) {
+            final on = _heroFocus.value || _heroHover.value;
+            return IgnorePointer(
+              ignoring: !on,
+              child: AnimatedOpacity(
+                opacity: on ? 1 : 0,
+                duration: Zm.fast,
+                curve: Zm.curve,
+                child: child,
+              ),
+            );
+          },
+          child: Row(children: [
+            _HeroArrow(icon: Icons.chevron_left_rounded, onTap: () => _stepSlide(-1)),
+            const Spacer(),
+            _HeroArrow(icon: Icons.chevron_right_rounded, onTap: () => _stepSlide(1)),
+          ]),
+        ),
+      ),
+    ];
+  }
+
+  /// Up must always be able to come back to the poster: directional traversal
+  /// rejects a hero whose centre is not above the row zone's centre, so when
+  /// the first row hangs off the top edge the key used to do nothing at all.
+  KeyEventResult _pageKeys(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.arrowUp) {
+      return KeyEventResult.ignored;
+    }
+    if (_heroNode.hasFocus) return KeyEventResult.ignored;
+    if (ZoneNavigator.move(TraversalDirection.up)) return KeyEventResult.handled;
+    if (!_heroNode.canRequestFocus) return KeyEventResult.ignored;
+    _heroNode.requestFocus();
+    return KeyEventResult.handled;
+  }
+
+  /// Brings the pinned poster back to its resting size when the D-pad lands on
+  /// it, since it lives outside the scroll view and `revealFocused` cannot.
+  void _scrollToPoster() {
+    if (!_scroll.hasClients) return;
+    final p = _scroll.position;
+    if (p.pixels <= 0.5) return;
+    p.animateTo(0, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+  }
+
+  /// Safety net for mouse wheels / trackpads: `Scrollable` normally consumes the
+  /// pointer signal itself, so this only kicks in when it does not.
+  void _onPointerSignal(PointerSignalEvent e) {
+    if (e is! PointerScrollEvent || !_scroll.hasClients) return;
+    final p = _scroll.position;
+    if (!p.hasContentDimensions) return;
+    _scroll.jumpTo((p.pixels + e.scrollDelta.dy).clamp(0.0, p.maxScrollExtent));
+  }
+
+  /// Items Left/Right walk through: the first row that has something to show.
+  List<Object> _arrowSlides(List<_Row> rows) {
+    for (final r in rows) {
+      if (r.kind == _Kind.moods || !_allowed.contains(r)) continue;
+      final items = _resolved[r];
+      if (items == null || items.isEmpty) continue;
+      return items.take(24).toList();
+    }
+    return const [];
+  }
+
+  void _stepSlide(int delta) {
+    final rows = _rows;
+    if (rows == null) return;
+    final slides = _arrowSlides(rows);
+    if (slides.length < 2) return;
+    final current = _shown == null ? -1 : slides.indexOf(_shown!);
+    final from = current < 0 ? 0 : current;
+    final next = ((from + delta) % slides.length + slides.length) % slides.length;
+    _focusData(slides[next]);
+  }
+
+  void _openShown() {
+    final data = _shown;
+    if (data is EmbyItem) openItem(context, data);
   }
 
   Widget _buildRow(_Row row, {required bool first}) {
@@ -600,5 +928,33 @@ class _HomePageState extends State<HomePage> {
       );
     }
     return mixedCard(context, data, style: row.style, rank: rank, autofocus: autofocus, onFocus: () => _focusData(data));
+  }
+}
+
+/// Circular prev/next control of the hero. Mouse only: the D-pad switches what
+/// the poster shows while the poster itself holds the focus.
+class _HeroArrow extends StatelessWidget {
+  const _HeroArrow({required this.icon, required this.onTap});
+
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.22),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: 34, color: Colors.white),
+        ),
+      ),
+    );
   }
 }
