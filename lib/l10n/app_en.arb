@@ -42,8 +42,8 @@
   "serversWatchedDaysAgo": "Watched {n} days ago",
   "syncCode": "Sync code",
   "syncCodeSubtitle": "Enter the code your server owner gave you, then your own username and password.",
-  "hubAddress": "Hub address",
-  "hubAddressHint": "e.g. zerkplay.example.com",
+  "hubAddress": "Console address",
+  "hubAddressHint": "Self-hosted? e.g. http://192.168.1.10:8790",
   "linkedTo": "Set up by {name}",
   "@linkedTo": {
     "placeholders": {
@@ -135,6 +135,7 @@
   "signingIn": "Signing in…",
   "errorWrongCredentials": "Wrong username or password.",
   "errorUnreachable": "Could not reach the server. Check the address.",
+  "hubAddressInvalid": "That console address does not look like a URL.",
   "phoneSetupTitle": "Set up from your phone",
   "phoneSetupBody": "Scan the code with a phone on the same network, or open the address in any browser.",
   "phoneSetupNoNetwork": "No network connection, so phone setup isn't available.",

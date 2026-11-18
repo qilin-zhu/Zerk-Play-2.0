@@ -193,11 +193,16 @@ final class HubLinkException implements Exception {
 abstract final class HubLink {
   static const _key = 'hub.link.v1';
 
+  /// Kept apart from the link record: the address a device typed once should
+  /// still be there after unlinking, so switching codes is a two-tap job.
+  static const _addressKey = 'hub.address';
+
   static String get defaultHub => Release.hub;
 
   static HubConfig? _config;
   static String? _code;
   static String? _hub;
+  static String? _address;
   static DateTime? _linkedAt;
 
   static final changed = ValueNotifier<int>(0);
@@ -214,10 +219,11 @@ abstract final class HubLink {
 
   static String? get code => _code;
 
-  static String get hub => _hub ?? defaultHub;
+  static String get hub => _hub ?? _address ?? defaultHub;
 
   static Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
+    _address = prefs.getString(_addressKey);
     final raw = prefs.getString(_key);
     if (raw == null) return;
     try {
@@ -238,11 +244,38 @@ abstract final class HubLink {
     return config != null && (at == null || DateTime.now().difference(at) > config.refreshAfter);
   }
 
-  static Uri _endpoint(String hub) {
+  /// Turns whatever someone typed into a hub origin: `10.0.0.5:8790` becomes
+  /// `http://10.0.0.5:8790`, a trailing slash or a pre-filled `/app/zerk-hub`
+  /// prefix is left alone. A bare name is assumed to be a LAN box, because
+  /// self-hosted consoles almost never carry a certificate.
+  static String normalize(String hub) {
     var h = hub.trim();
-    if (!h.contains('://')) h = 'https://$h';
-    final uri = Uri.parse(h);
-    return uri.replace(path: '/api/app/link', query: null, fragment: null);
+    if (h.isEmpty) return h;
+    if (!h.contains('://')) h = '${_looksLocal(h) ? 'http' : 'https'}://$h';
+    while (h.endsWith('/')) {
+      h = h.substring(0, h.length - 1);
+    }
+    return h;
+  }
+
+  static bool _looksLocal(String bare) {
+    final name = bare.split('/').first;
+    if (name.startsWith('[')) return true; // IPv6 literal
+    final host = name.split(':').first;
+    if (host == 'localhost' || host.endsWith('.local') || host.endsWith('.lan')) return true;
+    if (RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(host)) return true;
+    return name.contains(':'); // an explicit port means a private install
+  }
+
+  /// Keeps any prefix the address carries. A console served through the fnOS
+  /// gateway lives under `/app/zerk-hub`, and the hub strips that itself.
+  static Uri _endpoint(String hub) {
+    final uri = Uri.parse(normalize(hub));
+    var prefix = uri.path;
+    while (prefix.endsWith('/')) {
+      prefix = prefix.substring(0, prefix.length - 1);
+    }
+    return uri.replace(path: '$prefix/api/app/link', query: null, fragment: null);
   }
 
   static Future<HubConfig> redeem(String code, {String? hub}) async {
@@ -252,13 +285,22 @@ abstract final class HubLink {
       device = const Uuid().v4();
       await prefs.setString('hub.deviceId', device);
     }
-    final target = (hub == null || hub.trim().isEmpty) ? defaultHub : hub.trim();
+    final target = normalize((hub == null || hub.trim().isEmpty) ? defaultHub : hub);
     if (target.isEmpty) throw const HubLinkException('no-hub', 'Enter the hub address your server owner gave you.');
+    final Uri endpoint;
+    try {
+      endpoint = _endpoint(target);
+    } on FormatException {
+      throw const HubLinkException('bad-hub', 'That console address does not look like a URL.');
+    }
+    if (endpoint.host.isEmpty) {
+      throw const HubLinkException('bad-hub', 'That console address does not look like a URL.');
+    }
     final http.Response res;
     try {
       res = await http
           .post(
-            _endpoint(target),
+            endpoint,
             headers: {'content-type': 'application/json', 'accept': 'application/json'},
             body: jsonEncode({
               'code': code,
@@ -292,7 +334,9 @@ abstract final class HubLink {
     _config = config;
     _code = code;
     _hub = target;
+    _address = target;
     _linkedAt = DateTime.now();
+    await prefs.setString(_addressKey, target);
     await prefs.setString(_key, jsonEncode({
       'code': code,
       'hub': target,
@@ -331,7 +375,7 @@ abstract final class HubLink {
     final code = _code;
     if (code == null) return null;
     try {
-      return await redeem(code, hub: _hub);
+      return await redeem(code, hub: _hub ?? _address);
     } on HubLinkException catch (e) {
       debugPrint('[hub] refresh: ${e.code} ${e.message}');
       if (e.dropsLink) await unlink();

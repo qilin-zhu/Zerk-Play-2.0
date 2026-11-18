@@ -41,11 +41,14 @@ class _SignInPageState extends State<SignInPage> {
   bool _manual = false;
   String? _error = HubLink.droppedMessage;
   bool _busy = false;
+  String _site = '';
 
   @override
   void initState() {
     super.initState();
     _manual = widget.startManual;
+    _site = _siteOf(_hub.text);
+    _hub.addListener(_hubChanged);
     if (widget.addServer) return; // a new server must not inherit the old one
     final janus = AppServicesScope.read(context).janus;
     janus.getServerUrl().then((url) {
@@ -56,8 +59,22 @@ class _SignInPageState extends State<SignInPage> {
     });
   }
 
+  /// The owner hint on the left follows whatever console is being typed, so a
+  /// self-hosted address never sits next to someone else's domain.
+  static String _siteOf(String raw) {
+    final typed = Uri.tryParse(HubLink.normalize(raw))?.host ?? '';
+    if (typed.isNotEmpty) return typed;
+    return Uri.tryParse(Release.hub)?.host ?? '';
+  }
+
+  void _hubChanged() {
+    final site = _siteOf(_hub.text);
+    if (site != _site) setState(() => _site = site);
+  }
+
   @override
   void dispose() {
+    _hub.removeListener(_hubChanged);
     for (final c in [_server, _user, _pass, _code, _hub]) {
       c.dispose();
     }
@@ -83,7 +100,13 @@ class _SignInPageState extends State<SignInPage> {
       await action();
     } on HubLinkException catch (e) {
       UiSounds.play(UiSound.error);
-      if (mounted) setState(() => _error = e.message);
+      if (!mounted) return;
+      final l10n = context.l10n;
+      setState(() => _error = switch (e.code) {
+            'bad-hub' || 'no-hub' => l10n.hubAddressInvalid,
+            'unreachable' => l10n.errorUnreachable,
+            _ => e.message,
+          });
     } catch (e) {
       UiSounds.play(UiSound.error);
       if (mounted) setState(() => _error = _describe(context.l10n, e));
@@ -202,7 +225,7 @@ class _SignInPageState extends State<SignInPage> {
   Widget _codeLayout(BuildContext context, bool firstRun) {
     final l10n = context.l10n;
     final linked = HubLink.linked;
-    final site = Uri.tryParse(Release.hub)?.host ?? '';
+    final site = _site;
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -277,8 +300,12 @@ class _SignInPageState extends State<SignInPage> {
                       autofocus: Host.isDesktop,
                       onSubmit: _redeem,
                     ),
-                    if (Release.hub.isEmpty || _hub.text != Release.hub)
-                      _Field(controller: _hub, label: l10n.hubAddress, hint: l10n.hubAddressHint),
+                    _Field(
+                      controller: _hub,
+                      label: l10n.hubAddress,
+                      hint: l10n.hubAddressHint,
+                      onSubmit: _redeem,
+                    ),
                     const SizedBox(height: 8),
                     TvButton(
                       label: _busy ? l10n.codeChecking : l10n.codeContinue,
