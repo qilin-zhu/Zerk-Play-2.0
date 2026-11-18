@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
@@ -105,104 +106,121 @@ class _ServerMenuPanelState extends State<ServerMenuPanel> {
       child: Container(
         width: widget.width,
         height: widget.height,
-        padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
+        // Shadow outside the clip (a clipped shadow would be invisible), the
+        // blur and the tint inside it.
         decoration: BoxDecoration(
-          color: const Color(0xF213131B),
           borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: Zc.outline, width: 1.5),
-          boxShadow: const [BoxShadow(color: Color(0xAA000000), blurRadius: 60, offset: Offset(0, 24))],
+          boxShadow: const [BoxShadow(color: Color(0x99000000), blurRadius: 70, offset: Offset(0, 26))],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(l10n.serversTitle, style: Zt.headline.copyWith(fontSize: 30)),
-                const Spacer(),
-                TvFocusable(
-                  onSelect: () {
-                    setState(() {
-                      _manage = !_manage;
-                      _error = null;
-                    });
-                  },
-                  builder: (context, focused) => AnimatedContainer(
-                    duration: Zm.fast,
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: focused ? Colors.white : Zc.surfaceHigh,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: focused ? Colors.white : Zc.outline, width: 1.5),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(28),
+          child: BackdropFilter(
+            // Black glass: the artwork behind the panel is blurred, then
+            // darkened, so the list stays readable over a bright poster.
+            filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28, tileMode: TileMode.clamp),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.14), width: 1.5),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(l10n.serversTitle, style: Zt.headline.copyWith(fontSize: 30)),
+                      const Spacer(),
+                      TvFocusable(
+                        onSelect: () {
+                          setState(() {
+                            _manage = !_manage;
+                            _error = null;
+                          });
+                        },
+                        builder: (context, focused) => AnimatedContainer(
+                          duration: Zm.fast,
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: focused ? Colors.white : Colors.white.withValues(alpha: 0.09),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                                color: focused ? Colors.white : Colors.white.withValues(alpha: 0.14), width: 1.5),
+                          ),
+                          child: Icon(
+                            _manage ? Icons.check_rounded : Icons.settings_rounded,
+                            size: 26,
+                            color: focused ? Zc.background : Zc.textMuted,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_manage)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(l10n.serversManageHint, style: Zt.caption.copyWith(fontSize: 16)),
                     ),
-                    child: Icon(
-                      _manage ? Icons.check_rounded : Icons.settings_rounded,
-                      size: 26,
-                      color: focused ? Zc.background : Zc.textMuted,
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(_error!, style: Zt.caption.copyWith(fontSize: 16, color: Zc.danger)),
+                    ),
+                  const SizedBox(height: 14),
+                  Expanded(
+                    child: servers.isEmpty
+                        ? _Empty(l10n: l10n)
+                        : ListView.separated(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            itemCount: servers.length,
+                            separatorBuilder: (_, _) => const SizedBox(height: 4),
+                            itemBuilder: (context, i) {
+                              final server = servers[i];
+                              return _ServerRow(
+                                server: server,
+                                current: server.serverKey == widget.currentKey,
+                                busy: _busyId == server.id,
+                                dimmed: _busyId != null && _busyId != server.id,
+                                manage: _manage,
+                                onSelect: () => _signIn(server),
+                                onForget: () {
+                                  setState(() => _error = null);
+                                  unawaited(AppServicesScope.read(context).servers.forget(server));
+                                },
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 14),
+                  TvFocusable(
+                    onSelect: widget.onAdd,
+                    builder: (context, focused) => AnimatedContainer(
+                      duration: Zm.fast,
+                      height: 62,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: focused ? Colors.white : Colors.white.withValues(alpha: 0.09),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                            color: focused ? Colors.white : Colors.white.withValues(alpha: 0.14), width: focused ? 2 : 1.5),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.add_rounded, size: 28, color: focused ? Zc.background : Zc.text),
+                          const SizedBox(width: 12),
+                          Text(l10n.serversAdd,
+                              style: Zt.label.copyWith(fontSize: 22, color: focused ? Zc.background : Zc.text)),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            if (_manage)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Text(l10n.serversManageHint, style: Zt.caption.copyWith(fontSize: 16)),
-              ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(_error!, style: Zt.caption.copyWith(fontSize: 16, color: Zc.danger)),
-              ),
-            const SizedBox(height: 14),
-            Expanded(
-              child: servers.isEmpty
-                  ? _Empty(l10n: l10n)
-                  : ListView.separated(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      itemCount: servers.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 4),
-                      itemBuilder: (context, i) {
-                        final server = servers[i];
-                        return _ServerRow(
-                          server: server,
-                          current: server.serverKey == widget.currentKey,
-                          busy: _busyId == server.id,
-                          dimmed: _busyId != null && _busyId != server.id,
-                          manage: _manage,
-                          onSelect: () => _signIn(server),
-                          onForget: () {
-                            setState(() => _error = null);
-                            unawaited(AppServicesScope.read(context).servers.forget(server));
-                          },
-                        );
-                      },
-                    ),
-            ),
-            const SizedBox(height: 14),
-            TvFocusable(
-              onSelect: widget.onAdd,
-              builder: (context, focused) => AnimatedContainer(
-                duration: Zm.fast,
-                height: 62,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: focused ? Colors.white : Zc.surfaceHigh,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: focused ? Colors.white : Zc.outline, width: focused ? 2 : 1.5),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.add_rounded, size: 28, color: focused ? Zc.background : Zc.text),
-                    const SizedBox(width: 12),
-                    Text(l10n.serversAdd,
-                        style: Zt.label.copyWith(fontSize: 22, color: focused ? Zc.background : Zc.text)),
-                  ],
-                ),
+                ],
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -253,7 +271,6 @@ class _ServerRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    final color = _kindColor(server.kind);
     return Opacity(
       opacity: dimmed ? 0.45 : 1,
       child: TvFocusable(
@@ -271,15 +288,14 @@ class _ServerRow extends StatelessWidget {
               Container(
                 width: 54,
                 height: 54,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [color, Color.lerp(color, Colors.black, 0.25)!],
-                  ),
-                  borderRadius: BorderRadius.circular(16),
+                alignment: Alignment.center,
+                child: Image.asset(
+                  _kindAsset(server.kind),
+                  width: 54,
+                  height: 54,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.medium,
                 ),
-                child: const Icon(Icons.play_arrow_rounded, size: 30, color: Colors.white),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -357,8 +373,10 @@ class _ServerRow extends StatelessWidget {
   }
 }
 
-Color _kindColor(ServerKind kind) => switch (kind) {
-      ServerKind.emby => const Color(0xFF52B54B),
-      ServerKind.jellyfin => const Color(0xFFA65CD2),
-      ServerKind.fnos => const Color(0xFF3B82F6),
+/// The three server marks, shipped as assets so each row carries the logo the
+/// user knows from the server's own apps.
+String _kindAsset(ServerKind kind) => switch (kind) {
+      ServerKind.emby => 'assets/servers/emby.png',
+      ServerKind.jellyfin => 'assets/servers/jellyfin.png',
+      ServerKind.fnos => 'assets/servers/fnos.png',
     };

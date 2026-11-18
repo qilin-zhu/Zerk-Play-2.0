@@ -37,3 +37,4 @@ flutter:
     - assets/mpv/
     - assets/mpv/fonts/
     - assets/sounds/
+    - assets/servers/

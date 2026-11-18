@@ -103,6 +103,11 @@ class _ShellState extends State<Shell> {
   /// a node of its own to be reachable from the D-pad.
   final _logoNode = FocusNode(debugLabel: 'rail:logo');
 
+  /// Where the switcher panel hangs: the follower tracks the logo's paint
+  /// position, so the panel stays glued to the right of the mark even while the
+  /// rail is still animating open.
+  final _logoLink = LayerLink();
+
   bool _menuOpen = false;
   StreamSubscription<RoomState>? _roomSub;
   String? _roomCode;
@@ -110,7 +115,7 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
-    AppLog.write('[shell] build server-menu-v1 (saved servers, one-tap switch)');
+    AppLog.write('[shell] build server-menu-v2 (dropdown below the mark, glass panel, brand icons)');
     if (kReleaseMode && Updater.supported) {
       Future.delayed(const Duration(seconds: 5), () => mounted ? checkForUpdate(context) : null);
     }
@@ -343,8 +348,9 @@ class _ShellState extends State<Shell> {
             // The rail widens while the switcher is open, so the panel can be
             // anchored to its right edge without measuring anything.
             final railExpanded = _menuOpen || (_railFocused && (!pointer || _railHovered));
-            final railWidth = railExpanded ? _Rail.expandedWidth : _Rail.collapsedWidth;
-            final panelHeight = (MediaQuery.sizeOf(context).height - 40).clamp(360.0, 760.0).toDouble();
+            // The panel starts under the mark (~110 px down), so it can use
+            // whatever is left of the window minus a bottom margin.
+            final panelHeight = (MediaQuery.sizeOf(context).height - 140).clamp(300.0, 720.0).toDouble();
             return Stack(
               children: [
                 // While the switcher is open the page must not take the focus:
@@ -410,6 +416,7 @@ class _ShellState extends State<Shell> {
                             expanded: railExpanded,
                             menuOpen: _menuOpen,
                             logoNode: _logoNode,
+                            logoLink: _logoLink,
                             onOpenServers: _openMenu,
                             onSelect: _select,
                             nodes: _railNodes,
@@ -425,9 +432,15 @@ class _ShellState extends State<Shell> {
                   Positioned.fill(
                     child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _closeMenu),
                   ),
-                  Positioned(
-                    left: railWidth + 6,
-                    top: 20,
+                  // A plain dropdown: hangs off the bottom-left corner of the
+                  // mark, so it covers the nav items exactly like a menu under
+                  // any other header.
+                  CompositedTransformFollower(
+                    link: _logoLink,
+                    targetAnchor: Alignment.bottomLeft,
+                    followerAnchor: Alignment.topLeft,
+                    offset: const Offset(0, 12),
+                    showWhenUnlinked: false,
                     child: ServerMenuPanel(
                       currentKey: _serverKey,
                       height: panelHeight,
@@ -509,6 +522,7 @@ class _Rail extends StatefulWidget {
     required this.expanded,
     required this.menuOpen,
     required this.logoNode,
+    required this.logoLink,
     required this.onOpenServers,
     required this.onSelect,
     required this.nodes,
@@ -530,6 +544,7 @@ class _Rail extends StatefulWidget {
   /// The server switcher is showing: the logo keeps its chevron turned down.
   final bool menuOpen;
   final FocusNode logoNode;
+  final LayerLink logoLink;
   final VoidCallback onOpenServers;
   final ValueChanged<ShellTab> onSelect;
 
@@ -633,6 +648,7 @@ class _RailState extends State<_Rail> {
             expanded: expanded,
             open: widget.menuOpen,
             node: widget.logoNode,
+            link: widget.logoLink,
             onSelect: widget.onOpenServers,
           ),
           const Spacer(),
@@ -655,11 +671,18 @@ class _RailState extends State<_Rail> {
 }
 
 class _Logo extends StatelessWidget {
-  const _Logo({required this.expanded, required this.open, required this.node, required this.onSelect});
+  const _Logo({
+    required this.expanded,
+    required this.open,
+    required this.node,
+    required this.link,
+    required this.onSelect,
+  });
 
   final bool expanded;
   final bool open;
   final FocusNode node;
+  final LayerLink link;
   final VoidCallback onSelect;
 
   @override
@@ -667,55 +690,59 @@ class _Logo extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(left: 8),
       // The whole mark is the button: the chevron alone would be a tiny target,
-      // and on the D-pad it is the only way into the server switcher.
-      child: TvFocusable(
-        focusNode: node,
-        reveal: false,
-        onSelect: onSelect,
-        builder: (context, focused) => AnimatedContainer(
-          duration: Zm.fast,
-          curve: Zm.curve,
-          padding: EdgeInsets.only(right: expanded ? 14 : 0),
-          decoration: BoxDecoration(
-            color: focused ? Colors.white.withValues(alpha: 0.10) : Colors.transparent,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const ZerkLogo(size: 48),
-              if (expanded)
-                Flexible(
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 16),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(
-                          child: Text.rich(
-                            const TextSpan(children: [
-                              TextSpan(text: 'Zerk', style: TextStyle(fontWeight: FontWeight.w800)),
-                              TextSpan(
-                                  text: ' Play', style: TextStyle(fontWeight: FontWeight.w400, color: Zc.textMuted)),
-                            ]),
-                            maxLines: 1,
-                            overflow: TextOverflow.clip,
-                            style: Zt.title.copyWith(height: 1),
+      // and on the D-pad it is the only way into the server switcher. The
+      // composited target is what the switcher panel hangs off.
+      child: CompositedTransformTarget(
+        link: link,
+        child: TvFocusable(
+          focusNode: node,
+          reveal: false,
+          onSelect: onSelect,
+          builder: (context, focused) => AnimatedContainer(
+            duration: Zm.fast,
+            curve: Zm.curve,
+            padding: EdgeInsets.only(right: expanded ? 14 : 0),
+            decoration: BoxDecoration(
+              color: focused ? Colors.white.withValues(alpha: 0.10) : Colors.transparent,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const ZerkLogo(size: 48),
+                if (expanded)
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 16),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text.rich(
+                              const TextSpan(children: [
+                                TextSpan(text: 'Zerk', style: TextStyle(fontWeight: FontWeight.w800)),
+                                TextSpan(
+                                    text: ' Play', style: TextStyle(fontWeight: FontWeight.w400, color: Zc.textMuted)),
+                              ]),
+                              maxLines: 1,
+                              overflow: TextOverflow.clip,
+                              style: Zt.title.copyWith(height: 1),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        AnimatedRotation(
-                          turns: open ? 0.5 : 0,
-                          duration: Zm.normal,
-                          curve: Zm.curve,
-                          child: Icon(Icons.expand_more_rounded,
-                              size: 28, color: focused ? Colors.white : Zc.textMuted),
-                        ),
-                      ],
+                          const SizedBox(width: 8),
+                          AnimatedRotation(
+                            turns: open ? 0.5 : 0,
+                            duration: Zm.normal,
+                            curve: Zm.curve,
+                            child: Icon(Icons.expand_more_rounded,
+                                size: 28, color: focused ? Colors.white : Zc.textMuted),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

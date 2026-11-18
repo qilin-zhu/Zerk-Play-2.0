@@ -153,7 +153,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   @override
   void initState() {
     super.initState();
-    AppLog.write('[fnos] home build hero-v9 (random carousel, pin on card, resume on hero)');
+    AppLog.write('[fnos] home build hero-v10 (no indicator dots, random carousel)');
     HardwareKeyboard.instance.addHandler(_watchKey);
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
   }
@@ -853,38 +853,12 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
               ),
             ),
           ),
-          // Indicator dots, right above the overlapping row.
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: _overlap + 12,
-            child: Opacity(opacity: fadeOut, child: _dots()),
-          ),
+
         ]),
       ),
     );
   }
 
-  Widget _dots() {
-    final slides = _slides ?? const <FnOsItem>[];
-    final active = slides.isEmpty ? -1 : _slideIndex % slides.length;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        for (final (i, _) in slides.indexed)
-          AnimatedContainer(
-            duration: Zm.fast,
-            width: i == active ? 30 : 12,
-            height: 4,
-            margin: const EdgeInsets.symmetric(horizontal: 4),
-            decoration: BoxDecoration(
-              color: i == active ? Colors.white : Colors.white.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-      ],
-    );
-  }
 
   Widget _libRow(FnOsMediaDb db) {
     const w = Zs.posterWidth;
