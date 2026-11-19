@@ -32,6 +32,24 @@ abstract final class Updater {
 
   static bool get supported => !playStore && (Host.isWindows || Host.isAndroid);
 
+  /// Mirror bases used for update checks and downloads when GitHub is
+  /// unreachable (mainland China). Each base is prefixed onto a full GitHub
+  /// URL, ghproxy style: https://ghfast.top/https://github.com/...
+  /// api.github.com is not mirrored reliably, so mirror mode resolves the
+  /// latest tag from the releases.atom feed, or from the redirect of the
+  /// fixed latest/download URL, and downloads through the same base.
+  /// Mirrors come and go: the first answer wins, the rest are fallbacks.
+  static const defaultMirror = 'https://ghfast.top/';
+  static const _fallbackMirrors = ['https://ghproxy.net/', 'https://gh-proxy.com/'];
+
+  /// The asset every release carries under a version-independent name, so a
+  /// mirror can resolve "latest" without knowing the version first.
+  static String get _latestAssetName =>
+      Host.isAndroid ? 'ZerkPlay-Public-Android.apk' : 'ZerkPlay-Public-Windows-setup.exe';
+
+  static String get _latestAssetUrl =>
+      'https://github.com/${Release.repository}/releases/latest/download/$_latestAssetName';
+
   static bool _isNewer(String tag) {
     final match = RegExp(r'v?(\d+)\.(\d+)\.(\d+)').firstMatch(tag);
     if (match == null) return false;
@@ -52,7 +70,7 @@ abstract final class Updater {
     return name.startsWith('ZerkPlay-') && name.endsWith('-setup.exe');
   }
 
-  static Future<AppUpdate?> check() async {
+  static Future<AppUpdate?> _directCheck() async {
     final res = await http.get(
       Uri.https('api.github.com', '/repos/${Release.repository}/releases/latest'),
       headers: {'Accept': 'application/vnd.github+json'},
@@ -79,6 +97,73 @@ abstract final class Updater {
       download: Uri.parse(asset['browser_download_url'] as String),
       size: (asset['size'] as num?)?.toInt() ?? 0,
     );
+  }
+
+  /// Resolves the latest release tag through one mirror. The atom feed lists
+  /// the newest release first (we never publish prereleases, so no filtering);
+  /// mirrors that do not carry it are probed with the redirect of the fixed
+  /// latest/download URL, whose target names the tag.
+  static Future<(String, Uri)?> _mirrorCheck(String base) async {
+    final prefix = base.endsWith('/') ? base : '$base/';
+    try {
+      final res = await http
+          .get(Uri.parse('${prefix}https://github.com/${Release.repository}/releases.atom'))
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode == 200) {
+        final match = RegExp(r'releases/tag/(v?\d+\.\d+\.\d+)').firstMatch(res.body);
+        if (match != null) return (match.group(1)!, Uri.parse('$prefix$_latestAssetUrl'));
+      }
+    } catch (e) {
+      debugPrint('[update] atom via ${Uri.parse(prefix).host}: $e');
+    }
+    try {
+      final req = http.Request('GET', Uri.parse('$prefix$_latestAssetUrl'))
+        ..followRedirects = false
+        ..headers['range'] = 'bytes=0-0';
+      final res = await req.send().timeout(const Duration(seconds: 12));
+      final location = res.headers['location'];
+      unawaited(res.stream.listen(null).cancel());
+      if (location != null) {
+        final match = RegExp(r'releases/download/(v?\d+\.\d+\.\d+)/').firstMatch(location);
+        if (match != null) return (match.group(1)!, Uri.parse('$prefix$_latestAssetUrl'));
+      }
+    } catch (e) {
+      debugPrint('[update] redirect via ${Uri.parse(prefix).host}: $e');
+    }
+    return null;
+  }
+
+  /// [mirror] is the user-configured accelerator; empty means direct GitHub.
+  /// A direct check that dies on the network silently falls back to the
+  /// mirrors, so a user who never finds the setting still gets updates.
+  static Future<AppUpdate?> check({String mirror = ''}) async {
+    final forced = mirror.trim();
+    final bases = <String>[
+      if (forced.isNotEmpty) forced,
+      ..._fallbackMirrors,
+    ];
+    if (forced.isEmpty) {
+      try {
+        return await _directCheck();
+      } catch (e) {
+        debugPrint('[update] direct check failed, falling back to mirrors: $e');
+      }
+    }
+    for (final base in bases) {
+      final hit = await _mirrorCheck(base);
+      if (hit == null) continue;
+      final (tag, download) = hit;
+      debugPrint('[update] ${Release.tag} -> $tag (via ${Uri.parse(base).host})');
+      if (!_isNewer(tag)) return null;
+      return AppUpdate(
+        tag: tag,
+        name: 'Zerk Play ${tag.startsWith('v') ? tag.substring(1) : tag}',
+        download: download,
+        size: 0,
+      );
+    }
+    if (forced.isEmpty) rethrow; // surface the original direct-check error
+    throw const HttpException('No update mirror answered');
   }
 
   static Future<File> download(AppUpdate update, {void Function(double progress)? onProgress}) async {

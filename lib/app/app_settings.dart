@@ -85,6 +85,7 @@ final class AppSettings {
     this.libraryView = LibraryView.posters,
     this.homeCollections = const {},
     this.cardTrailers = true,
+    this.updateMirrorUrl = '',
   });
 
   final String seerrUrl;
@@ -128,6 +129,11 @@ final class AppSettings {
   final Map<String, List<(String, String)>> homeCollections;
 
   final bool cardTrailers;
+
+  /// Accelerator prefix for update checks and downloads; empty = direct
+  /// GitHub. Set to a ghproxy-style base (see Updater.defaultMirror) when
+  /// GitHub is unreachable, e.g. from mainland China.
+  final String updateMirrorUrl;
 
   List<(String, String)> homeCollectionsOf(String userId) => homeCollections[userId] ?? const [];
 
@@ -178,6 +184,7 @@ final class AppSettings {
     LibraryView? libraryView,
     Map<String, List<(String, String)>>? homeCollections,
     bool? cardTrailers,
+    String? updateMirrorUrl,
   }) =>
       AppSettings(
         seerrUrl: seerrUrl ?? this.seerrUrl,
@@ -206,6 +213,7 @@ final class AppSettings {
         libraryView: libraryView ?? this.libraryView,
         homeCollections: homeCollections ?? this.homeCollections,
         cardTrailers: cardTrailers ?? this.cardTrailers,
+        updateMirrorUrl: updateMirrorUrl ?? this.updateMirrorUrl,
       );
 
   static Future<bool> exist() async => (await SharedPreferences.getInstance()).containsKey(_key);
@@ -256,6 +264,7 @@ final class AppSettings {
             '$key': [for (final c in value as List) (c[0] as String, c[1] as String)],
         },
         cardTrailers: Host.isAndroid && j['cardTrailersV'] != 2 ? false : j['cardTrailers'] as bool? ?? !Host.isAndroid,
+        updateMirrorUrl: j['updateMirror'] as String? ?? '',
       );
     } catch (_) {
       return AppSettings(cardTrailers: !Host.isAndroid);
@@ -296,6 +305,7 @@ final class AppSettings {
         },
         'cardTrailers': cardTrailers,
         'cardTrailersV': 2,
+        'updateMirror': updateMirrorUrl,
       }),
     );
   }

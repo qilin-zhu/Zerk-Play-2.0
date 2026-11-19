@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../app/app_services.dart';
 import '../../l10n/l10n.dart';
 import '../../services/updater/updater.dart';
 import '../core/playback_launcher.dart';
@@ -13,7 +14,7 @@ Future<void> checkForUpdate(BuildContext context, {bool quiet = true}) async {
   final l10n = context.l10n;
   final AppUpdate? update;
   try {
-    update = await Updater.check();
+    update = await Updater.check(mirror: AppServicesScope.read(context).settings.updateMirrorUrl);
   } catch (e) {
     debugPrint('[update] check: $e');
     if (!quiet && context.mounted) showToast(context, l10n.updateCheckFailed);

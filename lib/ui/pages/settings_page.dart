@@ -833,12 +833,26 @@ class _SettingsPageState extends State<SettingsPage> {
               icon: Icons.outbox_rounded,
               onSelect: () => _sendLogs(context),
             ),
-          if (!Updater.playStore)
+          if (!Updater.playStore) ...[
+            SettingToggleRow(
+              title: l10n.updateMirror,
+              subtitle: l10n.updateMirrorHint,
+              value: app.updateMirrorUrl.trim().isNotEmpty,
+              onChanged: (v) => services.updateSettings(app.copyWith(updateMirrorUrl: v ? Updater.defaultMirror : '')),
+            ),
+            if (app.updateMirrorUrl.trim().isNotEmpty)
+              SettingTextRow(
+                title: l10n.updateMirrorAddress,
+                value: app.updateMirrorUrl,
+                hint: Updater.defaultMirror,
+                onChanged: (v) => services.updateSettings(app.copyWith(updateMirrorUrl: v.trim())),
+              ),
             SettingActionRow(
               title: l10n.checkForUpdates,
               icon: Icons.system_update_rounded,
               onSelect: () => checkForUpdate(context, quiet: false),
             ),
+          ],
           const SizedBox(height: 20),
           Text(l10n.appVersionLabel(Release.version), style: Zt.title),
           const SizedBox(height: 8),

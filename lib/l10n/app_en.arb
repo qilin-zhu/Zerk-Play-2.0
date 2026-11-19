@@ -1314,6 +1314,9 @@
     }
   },
   "checkForUpdates": "Check for updates",
+  "updateMirror": "Use a China mirror for updates",
+  "updateMirrorHint": "GitHub may be unreachable from mainland China; with this on, update checks and downloads go through an accelerator mirror",
+  "updateMirrorAddress": "Mirror URL",
   "upToDate": "You have the latest version.",
   "updateCheckFailed": "Could not check for updates.",
   "updateAvailable": "{name} is available",
