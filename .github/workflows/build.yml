@@ -16,7 +16,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.2'
+  APP_VERSION: '2.10.3'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -251,6 +251,8 @@ jobs:
             **更新检查修复**：2.10.0 及更早版本的客户端检查更新始终提示「已是最新版」，本版修复了版本比较逻辑，并通过兼容文件名让旧版客户端也能收到本次更新。
 
             **国内加速源**：设置 → 诊断 → 「更新使用国内加速源」，GitHub 直连失败的环境可走加速镜像检查和下载更新；直连失败时也会自动尝试镜像。
+
+            **修复 Windows 更新卡死**：下载完安装包后应用退出卡在 HDR 恢复钩子里、安装器又反过来等应用退出。现在应用走窗口销毁的快速退出路径，安装器遇到占用会直接强制关闭应用。
 
             Windows 端依赖 [libmpv](https://github.com/shinchiro/mpv-winbuild-cmake)，已经打包进安装目录，不用另外装。
 

@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' show AppExitType;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../app/release.dart';
 import '../../core/host.dart';
@@ -206,11 +206,21 @@ abstract final class Updater {
       await _channel.invokeMethod('install', file.path);
       return;
     }
+    // /FORCECLOSEAPPLICATIONS is the deadlock-breaker: without it the setup
+    // waits for this app to exit, while the app's own engine exit path can
+    // idle for seconds (NativeWindow's destructor restores HDR / refresh rate
+    // on shutdown) — both sides end up waiting on each other.
     await Process.start(
       file.path,
-      ['/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS'],
+      ['/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/FORCECLOSEAPPLICATIONS'],
       mode: ProcessStartMode.detached,
     );
-    await ServicesBinding.instance.exitApplication(AppExitType.required);
+    // Same fast path as the exit button: destroying the window quits at once,
+    // never touching the slow shutdown hook. `exit(0)` is the fallback for
+    // when the window is already gone or destroy wedges.
+    try {
+      await windowManager.destroy().timeout(const Duration(milliseconds: 1500));
+    } catch (_) {}
+    exit(0);
   }
 }
