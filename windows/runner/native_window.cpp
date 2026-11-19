@@ -113,13 +113,14 @@ NativeWindow::~NativeWindow() {
   if (!hdr_enabled_by_app_) return;
   const auto target = TargetFor(window_);
   if (!target) return;
-  std::thread([target]() {
+  const Target t = *target;
+  std::thread([t]() {
     SetColorState state = {};
-    InitHeader(state, kSetHdrState, target);
+    InitHeader(state, kSetHdrState, t);
     state.flags = 0u;
     LONG rc = DisplayConfigSetDeviceInfo(&state.header);
     if (rc != ERROR_SUCCESS) {
-      InitHeader(state, kSetAdvancedColorState, target);
+      InitHeader(state, kSetAdvancedColorState, t);
       DisplayConfigSetDeviceInfo(&state.header);
     }
   }).detach();
