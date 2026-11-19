@@ -175,14 +175,10 @@ jobs:
           if (-not (Test-Path $iscc)) { throw 'ISCC.exe not found after installing Inno Setup' }
 
           # The Chinese wizard translation lives in the Inno Setup sources, not
-          # in the compiler. installer\zerk_play.iss only picks it up when the
-          # file is present, so a failed download is not fatal.
-          $lang = 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl'
-          try {
-            Invoke-WebRequest -Uri $lang -OutFile 'installer\ChineseSimplified.isl' -TimeoutSec 90
-            Write-Host 'Chinese wizard translation ready'
-          } catch {
-            Write-Host "Chinese translation unavailable, falling back to English: $_"
+          # in the compiler, so a copy is committed next to the script.
+          # installer\zerk_play.iss degrades to English when it is missing.
+          if (-not (Test-Path 'installer\ChineseSimplified.isl')) {
+            Write-Host 'WARNING: ChineseSimplified.isl missing, the wizard will be English only'
           }
 
           & $iscc "/DAppVersion=$env:APP_VERSION" 'installer\zerk_play.iss'
@@ -233,7 +229,7 @@ jobs:
 
             | 平台 | 文件 | 说明 |
             | --- | --- | --- |
-            | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-setup.exe` | 安装包，推荐 |
+            | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包，推荐 |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip` | 免安装，解压即用 |
             | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
 

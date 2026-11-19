@@ -5,7 +5,9 @@
   #define AppVersion "2.0.9"
 #endif
 #define AppExe "zerk_play.exe"
-#define BuildDir "..\build\windows\x64\runner\Release"
+#ifndef BuildDir
+  #define BuildDir "..\build\windows\x64\runner\Release"
+#endif
 #if DirExists(GetEnv("SystemRoot") + "\Sysnative")
   #define VcRuntimeDir GetEnv("SystemRoot") + "\Sysnative"
 #else
