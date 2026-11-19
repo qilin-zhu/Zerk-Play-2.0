@@ -142,10 +142,12 @@ abstract final class Updater {
       if (forced.isNotEmpty) forced,
       ..._fallbackMirrors,
     ];
+    Object? directError;
     if (forced.isEmpty) {
       try {
         return await _directCheck();
       } catch (e) {
+        directError = e;
         debugPrint('[update] direct check failed, falling back to mirrors: $e');
       }
     }
@@ -162,7 +164,7 @@ abstract final class Updater {
         size: 0,
       );
     }
-    if (forced.isEmpty) rethrow; // surface the original direct-check error
+    if (directError != null) throw directError; // surface the original direct-check error
     throw const HttpException('No update mirror answered');
   }
 
