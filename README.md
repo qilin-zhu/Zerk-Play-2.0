@@ -1,4 +1,8 @@
 <p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   <img src="banner.png" alt="Zerk Play" width="840">
 </p>
 
