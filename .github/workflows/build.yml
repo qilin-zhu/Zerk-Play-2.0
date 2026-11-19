@@ -13,6 +13,14 @@ env:
   # Newer stable releases require a higher Android Gradle Plugin than the
   # project uses, which breaks the build.
   FLUTTER_VERSION: '3.47.0'
+  # Single source of truth for the release tag, the asset names and the
+  # installer. Keep it in sync with pubspec.yaml (version:) and
+  # lib/core/log/app_log.dart (appVersion).
+  APP_VERSION: '2.0.9'
+
+# The release job pushes a tag and uploads assets.
+permissions:
+  contents: write
 
 jobs:
   android:
@@ -52,11 +60,19 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release
 
+      # Renaming here keeps the release page readable: every asset carries the
+      # version, so a user can tell two downloads apart in their folder.
+      - name: Rename APK
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/ZerkPlay-${APP_VERSION}-android.apk"
+          ls -lh dist
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ZerkPlay-android-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          name: android-packages
+          path: dist/*.apk
           if-no-files-found: error
 
   windows:
@@ -134,24 +150,93 @@ jobs:
       - name: Build Windows release
         run: flutter build windows --release
 
-      - name: Package
+      # Two artifacts on purpose: the setup.exe is what the console hands out,
+      # the portable zip is the escape hatch for people who cannot install.
+      - name: Package (setup installer + portable zip)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $src = 'build\windows\x64\runner\Release'
-          if (-not (Test-Path (Join-Path $src 'zerk_play.exe'))) {
-            throw "zerk_play.exe missing in $src"
+          foreach ($f in @('zerk_play.exe', 'libmpv-2.dll')) {
+            if (-not (Test-Path (Join-Path $src $f))) { throw "$f missing in $src" }
           }
-          if (-not (Test-Path (Join-Path $src 'libmpv-2.dll'))) {
-            throw 'libmpv-2.dll was not bundled next to the executable'
-          }
-          Compress-Archive -Path (Join-Path $src '*') `
-            -DestinationPath 'ZerkPlay-windows-x64-zh.zip' -Force
-          Get-Item 'ZerkPlay-windows-x64-zh.zip' | Select-Object Name, Length
 
-      - name: Upload Windows build
+          $zip = "ZerkPlay-$env:APP_VERSION-windows-x64-portable.zip"
+          Compress-Archive -Path (Join-Path $src '*') -DestinationPath $zip -Force
+          Write-Host "portable: $((Get-Item $zip).Length) bytes"
+
+          # Inno Setup is not guaranteed to be on the image, so install it if
+          # the compiler is missing.
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y | Out-Host
+            $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          }
+          if (-not (Test-Path $iscc)) { throw 'ISCC.exe not found after installing Inno Setup' }
+
+          # The Chinese wizard translation lives in the Inno Setup sources, not
+          # in the compiler. installer\zerk_play.iss only picks it up when the
+          # file is present, so a failed download is not fatal.
+          $lang = 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl'
+          try {
+            Invoke-WebRequest -Uri $lang -OutFile 'installer\ChineseSimplified.isl' -TimeoutSec 90
+            Write-Host 'Chinese wizard translation ready'
+          } catch {
+            Write-Host "Chinese translation unavailable, falling back to English: $_"
+          }
+
+          & $iscc "/DAppVersion=$env:APP_VERSION" 'installer\zerk_play.iss'
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+
+          New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
+          Copy-Item $zip 'dist\' -Force
+          Copy-Item 'build\installer\*.exe' 'dist\' -Force
+          Get-ChildItem 'dist' | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
+
+      - name: Upload Windows packages
         uses: actions/upload-artifact@v4
         with:
-          name: ZerkPlay-windows-x64
-          path: ZerkPlay-windows-x64-zh.zip
+          name: windows-packages
+          path: dist/*
           if-no-files-found: error
+
+  release:
+    name: Publish release
+    # Both platforms must succeed: a release that only carries one of them
+    # looks like a broken download to whoever opens the console.
+    needs: [android, windows]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List packages
+        run: ls -lh dist
+
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION }}
+          name: Zerk Play ${{ env.APP_VERSION }}
+          # The console resolves /releases/latest, so this one must win over
+          # any older beta tag sitting in the repository.
+          make_latest: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: dist/*
+          body: |
+            **Zerk Play ${{ env.APP_VERSION }} 正式版**
+
+            | 平台 | 文件 | 说明 |
+            | --- | --- | --- |
+            | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-setup.exe` | 安装包，推荐 |
+            | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip` | 免安装，解压即用 |
+            | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
+
+            Windows 端依赖 [libmpv](https://github.com/shinchiro/mpv-winbuild-cmake)，已经打包进安装目录，不用另外装。
+
+            安装包默认装到当前用户目录（不弹 UAC），勾选「创建桌面快捷方式」或从开始菜单启动。
