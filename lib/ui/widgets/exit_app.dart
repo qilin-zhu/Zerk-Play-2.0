@@ -1,3 +1,4 @@
+import 'dart:io' show exit;
 import 'dart:ui' show AppExitResponse, AppExitType;
 
 import 'package:flutter/material.dart';
@@ -29,20 +30,25 @@ Future<void> exitApp() async {
     await SystemNavigator.pop();
     return;
   }
-  // Closing the window quits immediately because it never waits for the
-  // shutdown hook, which can idle for seconds handing HDR and the refresh rate
-  // back. Give that hook a short moment, then close the window regardless so
-  // the button feels the same as the title bar.
+  // Hide the window first so it vanishes the instant the button is pressed —
+  // the teardown below (engine shutdown, HDR hand-back on a helper thread) can
+  // still take seconds and must not be visible. Destroy with a short timeout
+  // so the engine usually exits cleanly; if it wedges (mpv still holding the
+  // HDR swapchain), `exit(0)` ends the process regardless.
+  try {
+    await windowManager.hide();
+  } catch (_) {}
   try {
     await ServicesBinding.instance
         .exitApplication(AppExitType.cancelable)
-        .timeout(const Duration(milliseconds: 800), onTimeout: () => AppExitResponse.cancel);
+        .timeout(const Duration(milliseconds: 500), onTimeout: () => AppExitResponse.cancel);
   } catch (_) {
     // The engine may already be tearing down; fall through to the hard close.
   }
   try {
-    await windowManager.destroy();
+    await windowManager.destroy().timeout(const Duration(milliseconds: 800));
   } catch (_) {}
+  exit(0);
 }
 
 class _ExitDialog extends StatelessWidget {

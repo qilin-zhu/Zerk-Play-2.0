@@ -215,11 +215,15 @@ abstract final class Updater {
       ['/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/FORCECLOSEAPPLICATIONS'],
       mode: ProcessStartMode.detached,
     );
-    // Same fast path as the exit button: destroying the window quits at once,
-    // never touching the slow shutdown hook. `exit(0)` is the fallback for
-    // when the window is already gone or destroy wedges.
+    // Same fast path as the exit button: hide the window so it vanishes at
+    // once, then destroy with a short timeout and `exit(0)` as the fallback.
+    // The engine teardown (HDR hand-back included) can idle for seconds and
+    // must never delay the installer that is waiting for us to quit.
     try {
-      await windowManager.destroy().timeout(const Duration(milliseconds: 1500));
+      await windowManager.hide();
+    } catch (_) {}
+    try {
+      await windowManager.destroy().timeout(const Duration(milliseconds: 800));
     } catch (_) {}
     exit(0);
   }

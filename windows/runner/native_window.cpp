@@ -3,6 +3,7 @@
 #include <flutter/standard_method_codec.h>
 
 #include <optional>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -104,7 +105,24 @@ NativeWindow::NativeWindow(HWND window, flutter::BinaryMessenger* messenger) : w
 
 NativeWindow::~NativeWindow() {
   channel_->SetMethodCallHandler(nullptr);
-  if (hdr_enabled_by_app_) SetHdr(false);
+  // Handing HDR back while the display stack is busy (mpv may still hold the
+  // HDR swapchain) can block DisplayConfigSetDeviceInfo for seconds and wedge
+  // the fully synchronous DestroyWindow chain. The target lookups above are
+  // cheap reads; only the reconfiguration itself is slow, so run it on a
+  // detached thread and let the window tear down immediately.
+  if (!hdr_enabled_by_app_) return;
+  const auto target = TargetFor(window_);
+  if (!target) return;
+  std::thread([target]() {
+    SetColorState state = {};
+    InitHeader(state, kSetHdrState, target);
+    state.flags = 0u;
+    LONG rc = DisplayConfigSetDeviceInfo(&state.header);
+    if (rc != ERROR_SUCCESS) {
+      InitHeader(state, kSetAdvancedColorState, target);
+      DisplayConfigSetDeviceInfo(&state.header);
+    }
+  }).detach();
 }
 
 void NativeWindow::SetFullScreen(bool fullscreen) {
