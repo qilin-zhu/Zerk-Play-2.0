@@ -28,25 +28,49 @@ final class UpdateNotAllowed implements Exception {
 abstract final class Updater {
   static const _channel = MethodChannel('zerk/updater');
 
-  static String get _assetName => Host.isAndroid ? 'ZerkPlay-Public-Android.apk' : 'ZerkPlay-Public-Windows-setup.exe';
-
   static const playStore = bool.fromEnvironment('PLAY_STORE');
 
   static bool get supported => !playStore && (Host.isWindows || Host.isAndroid);
 
+  static bool _isNewer(String tag) {
+    final match = RegExp(r'v?(\d+)\.(\d+)\.(\d+)').firstMatch(tag);
+    if (match == null) return false;
+    final parts = Release.version.split('.');
+    if (parts.length != 3) return false;
+    for (var i = 0; i < 3; i++) {
+      final remote = int.tryParse(match.group(i + 1)!);
+      final local = int.tryParse(parts[i]);
+      if (remote == null || local == null) return false;
+      if (remote != local) return remote > local;
+    }
+    return false;
+  }
+
+  static bool _isOurAsset(String name) {
+    if (name.startsWith('ZerkPlay-Public-')) return false; // legacy names kept only for pre-2.10.1 clients
+    if (Host.isAndroid) return name.startsWith('ZerkPlay-') && name.endsWith('.apk');
+    return name.startsWith('ZerkPlay-') && name.endsWith('-setup.exe');
+  }
+
   static Future<AppUpdate?> check() async {
     final res = await http.get(
-      Uri.https('api.github.com', '/repos/${Release.repository}/releases', {'per_page': '10'}),
+      Uri.https('api.github.com', '/repos/${Release.repository}/releases/latest'),
       headers: {'Accept': 'application/vnd.github+json'},
     ).timeout(const Duration(seconds: 15));
+    if (res.statusCode == 404) return null;
     if (res.statusCode != 200) throw HttpException('GitHub answered ${res.statusCode}');
-    final releases = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>().where((r) => r['draft'] != true).toList()
-      ..sort((a, b) => '${b['published_at']}'.compareTo('${a['published_at']}'));
-    final latest = releases.firstOrNull;
-    if (latest == null || latest['tag_name'] == Release.tag) return null;
-    final asset = (latest['assets'] as List).cast<Map<String, dynamic>>().where((a) => a['name'] == _assetName).firstOrNull;
-    if (asset == null) return null;
+    final latest = jsonDecode(res.body) as Map<String, dynamic>;
+    if (latest['draft'] == true || latest['prerelease'] == true) return null;
     final tag = latest['tag_name'] as String;
+    if (!_isNewer(tag)) {
+      debugPrint('[update] ${Release.tag} is up to date ($tag)');
+      return null;
+    }
+    final asset = (latest['assets'] as List)
+        .cast<Map<String, dynamic>>()
+        .where((a) => _isOurAsset(a['name'] as String))
+        .firstOrNull;
+    if (asset == null) return null;
     final name = (latest['name'] as String?)?.trim() ?? '';
     debugPrint('[update] ${Release.tag} -> $tag');
     return AppUpdate(
@@ -61,7 +85,7 @@ abstract final class Updater {
     final dir = Directory(p.join((await getTemporaryDirectory()).path, 'zerk_play_update'));
     if (await dir.exists()) await dir.delete(recursive: true);
     await dir.create(recursive: true);
-    final file = File(p.join(dir.path, _assetName));
+    final file = File(p.join(dir.path, p.basename(update.download.path)));
     final client = http.Client();
     try {
       final res = await client.send(http.Request('GET', update.download));

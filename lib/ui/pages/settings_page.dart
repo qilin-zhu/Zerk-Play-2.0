@@ -840,7 +840,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onSelect: () => checkForUpdate(context, quiet: false),
             ),
           const SizedBox(height: 20),
-          Text(l10n.appVersionLabel(Release.name), style: Zt.title),
+          Text(l10n.appVersionLabel(Release.version), style: Zt.title),
           const SizedBox(height: 8),
           Text(AppLog.appVersion, style: Zt.caption),
           if (AppLog.file != null) ...[

@@ -16,7 +16,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.0'
+  APP_VERSION: '2.10.1'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -57,8 +57,10 @@ jobs:
       - name: Generate localizations
         run: flutter gen-l10n
 
+      # APP_VERSION feeds Release.version, which the update checker compares
+      # against the latest GitHub release tag.
       - name: Build release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --dart-define=APP_VERSION=$APP_VERSION
 
       # Renaming here keeps the release page readable: every asset carries the
       # version, so a user can tell two downloads apart in their folder.
@@ -147,8 +149,10 @@ jobs:
       - name: Generate localizations
         run: flutter gen-l10n
 
+      # APP_VERSION feeds Release.version, which the update checker compares
+      # against the latest GitHub release tag.
       - name: Build Windows release
-        run: flutter build windows --release
+        run: flutter build windows --release --dart-define=APP_VERSION=$env:APP_VERSION
 
       # Two artifacts on purpose: the setup.exe is what the console hands out,
       # the portable zip is the escape hatch for people who cannot install.
@@ -212,6 +216,15 @@ jobs:
       - name: List packages
         run: ls -lh dist
 
+      # Pre-2.10.1 clients look for fixed asset names (ZerkPlay-Public-*),
+      # which no release ever carried, so their update check always said
+      # "already up to date". Publishing these copies lets them finally see
+      # the 2.10.1 update; the fixed checker ignores them by prefix.
+      - name: Copy legacy-named assets for old clients
+        run: |
+          cp "dist/ZerkPlay-${APP_VERSION}-android.apk" "dist/ZerkPlay-Public-Android.apk"
+          cp "dist/ZerkPlay-${APP_VERSION}-setup.exe" "dist/ZerkPlay-Public-Windows-setup.exe"
+
       - name: Publish to Releases
         uses: softprops/action-gh-release@v2
         with:
@@ -232,6 +245,10 @@ jobs:
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包，推荐 |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip` | 免安装，解压即用 |
             | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
+            | Windows x64 | `ZerkPlay-Public-Windows-setup.exe` | 旧版客户端（≤2.10.0）检查更新专用，与 setup.exe 内容相同 |
+            | Android | `ZerkPlay-Public-Android.apk` | 旧版客户端（≤2.10.0）检查更新专用，与 android.apk 内容相同 |
+
+            **更新检查修复**：2.10.0 及更早版本的客户端检查更新始终提示「已是最新版」，本版修复了版本比较逻辑，并通过兼容文件名让旧版客户端也能收到本次更新。
 
             Windows 端依赖 [libmpv](https://github.com/shinchiro/mpv-winbuild-cmake)，已经打包进安装目录，不用另外装。
 
