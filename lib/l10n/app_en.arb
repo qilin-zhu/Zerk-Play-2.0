@@ -104,19 +104,6 @@
       }
     }
   },
-  "sendLogs": "Send logs to the developer",
-  "sendLogsHint": "Uploads the logs from this and the last session so a problem can be looked at. You get a code to share on Discord.",
-  "sendLogsSending": "Sending logs…",
-  "sendLogsDoneTitle": "Logs sent",
-  "sendLogsDoneBody": "Share this code on Discord so your logs can be found:",
-  "sendLogsFailed": "Couldn't send the logs. {error}",
-  "@sendLogsFailed": {
-    "placeholders": {
-      "error": {
-        "type": "String"
-      }
-    }
-  },
   "hubLinkedSetting": "Sync code",
   "hubLinkedSettingValue": "{code} · {name}",
   "@hubLinkedSettingValue": {

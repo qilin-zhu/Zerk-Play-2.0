@@ -56,7 +56,7 @@ final class PlayerSettings {
     this.toneMapping = 'auto',
     this.deband = false,
     this.videoOutput = 'gpu-next',
-    this.detailedLog = true,
+    this.detailedLog = false,
     this.scopeScreen = 0,
     this.autoCrop = false,
     this.defaultAspect = 'auto',
