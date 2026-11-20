@@ -193,10 +193,13 @@ final class FnOsPlayback {
     }
     final isM3u8 = quality?['is_m3u8'] == true;
     final header = streamData['header'];
+    // The provider header values are lists on the wire (e.g. "User-Agent":
+    // ["Mozilla/5.0 …"]) — flatten them into plain header strings.
+    String flatten(Object? v) => v is List ? v.map((e) => '$e').join(', ') : '$v';
     final providerHeaders = <String, String>{
       if (header is Map)
         for (final e in header.entries)
-          if (e.value != null) e.key.toString(): e.value!.toString(),
+          if (e.value != null) e.key.toString(): flatten(e.value),
     };
 
     // Direct CDN playback: never attach NAS credentials to a foreign host.

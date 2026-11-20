@@ -245,8 +245,17 @@ final class FnosClient {
         if (mediaGuid != null && mediaGuid.isNotEmpty) 'media_guid': mediaGuid,
       });
 
-  Future<Object?> stream(String mediaGuid, {int level = 0}) =>
-      post('/v/api/v1/stream', body: {'media_guid': mediaGuid, 'level': level});
+  /// Stream session for a media guid. The server is picky about the body —
+  /// verified against a real server: `level` must be 1, `ip` must be
+  /// md5(token) and `header` must carry the client User-Agent, or it answers
+  /// `Invalid Params`. The response carries the cloud/STRM playback info
+  /// (cloud_storage_info, direct_link_qualities, provider header).
+  Future<Object?> stream(String mediaGuid) => post('/v/api/v1/stream', body: {
+        'media_guid': mediaGuid,
+        'ip': md5.convert(utf8.encode(_token ?? '')).toString(),
+        'level': 1,
+        'header': {'User-Agent': [_userAgent]},
+      });
 
   Future<Object?> playRecord(Map<String, Object?> body) => post('/v/api/v1/play/record', body: body);
 
