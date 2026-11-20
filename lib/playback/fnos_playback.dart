@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import '../app/app_services.dart';
 import '../core/fnos/fnos_client.dart';
 import '../core/fnos/fnos_item.dart';
+import '../core/fnos/quark_cdn_proxy.dart';
 import '../core/host.dart';
 import '../l10n/l10n.dart';
 import 'kept_display.dart';
@@ -41,6 +42,7 @@ final class FnOsPlayback {
 
   final _done = Completer<void>();
   PlayerBackend? _backend;
+  QuarkCdnProxy? _cdnProxy;
   StreamSubscription<PlayerEvent>? _eventsSub;
   Timer? _progressTimer;
   Timer? _loadWatchdog;
@@ -125,6 +127,30 @@ final class FnOsPlayback {
           url = resolved.url;
           playHeaders = resolved.headers;
           _playLink = resolved.playLink;
+          if (resolved.cdnUpstream != null) {
+            final proxy = QuarkCdnProxy(
+              upstream: resolved.cdnUpstream!,
+              upstreamHeaders: resolved.cdnHeaders,
+            );
+            try {
+              final proxied = await proxy.start();
+              _cdnProxy = proxy;
+              url = proxied.toString();
+              playHeaders = const {};
+              debugPrint('[fnos] quark cdn proxy: $url (upstream ${resolved.cdnUpstream!.host})');
+            } catch (e) {
+              await proxy.stop();
+              // The parallel-range proxy failed to start (bind/probe error):
+              // fall back to the NAS media/range proxy, slow but playable.
+              url = client.directStreamUrl(_mediaGuid, directLinkQualityIndex: 0);
+              playHeaders = {...client.imageHeaders};
+              final header = streamData['header'];
+              if (header is Map && header.isNotEmpty) {
+                playHeaders['X-Wp-Header'] = jsonEncode(header);
+              }
+              debugPrint('[fnos] quark cdn proxy failed: $e — NAS proxy fallback');
+            }
+          }
           debugPrint('[fnos] resolved cloud type=${resolved.cloudType} url=${Uri.parse(url).host}');
         }
       }
@@ -171,7 +197,9 @@ final class FnOsPlayback {
   ///   media/range proxy.
   /// - Aliyun (2) / 123 (5) / 115 non-m3u8 (3): play the raw CDN link directly.
   /// - 115 m3u8: rewrite through the /wp/m3u8 proxy.
-  /// - Baidu (1) / Quark (4) / unknown providers: NAS proxy with the quality
+  /// - Quark (4): raw CDN link through the local parallel-range proxy
+  ///   (per-connection CDN throttling makes everything else starve).
+  /// - Baidu (1) / m3u8 / unknown providers: NAS proxy with the quality
   ///   index so the server selects the matching CDN link.
   ///
   /// Direct CDN requests carry only the provider headers from the stream
@@ -212,6 +240,15 @@ final class FnOsPlayback {
       final url = client.wpM3u8Url(link);
       return _ResolvedStream(type, url, {...client.imageHeaders, ...providerHeaders},
           _stripOrigin(url));
+    }
+    if (type == 4 && !isM3u8) {
+      // Quark: the CDN throttles every TCP connection (measured ~0.09 MB/s on
+      // the file head vs ~6 MB/s mid-file on the same URL), so the NAS proxy
+      // and a plain direct link both starve 4K playback to a black screen.
+      // Play the raw CDN link through the local parallel-range proxy instead
+      // (mirrors FlyNarwhal's CDN 分段直连, on by default there).
+      return _ResolvedStream(type, '', const {}, _stripOrigin(link),
+          cdnUpstream: Uri.tryParse(link), cdnHeaders: providerHeaders);
     }
     // NAS proxy with the quality index (Baidu/Quark/fallbacks).
     final url = client.directStreamUrl(_mediaGuid, directLinkQualityIndex: 0);
@@ -309,6 +346,12 @@ final class FnOsPlayback {
       await _report(s.position.inSeconds);
     }
     await KeptDisplay.restore().timeout(const Duration(milliseconds: 800), onTimeout: () {});
+    try {
+      await _cdnProxy?.stop();
+    } catch (e) {
+      debugPrint('[fnos] cdn proxy stop: $e');
+    }
+    _cdnProxy = null;
     await backend?.close();
     _eventsSub?.cancel();
     if (!_done.isCompleted) _done.complete();
@@ -317,12 +360,18 @@ final class FnOsPlayback {
 
 /// One resolved playback target from the `/stream` response.
 final class _ResolvedStream {
-  const _ResolvedStream(this.cloudType, this.url, this.headers, this.playLink);
+  const _ResolvedStream(this.cloudType, this.url, this.headers, this.playLink,
+      {this.cdnUpstream, this.cdnHeaders = const {}});
 
   final int cloudType;
   final String url;
   final Map<String, String> headers;
   final String playLink;
+
+  /// Non-null for Quark: [url] must be replaced by the local parallel-range
+  /// proxy serving [cdnUpstream] with [cdnHeaders].
+  final Uri? cdnUpstream;
+  final Map<String, String> cdnHeaders;
 }
 
 /// Launches fnOS playback from a UI context.
