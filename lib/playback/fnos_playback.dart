@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -55,6 +56,7 @@ final class FnOsPlayback {
   String _audioGuid = '';
   String? _subtitleGuid;
   int _durationHint = 0;
+  String _playLink = '';
 
   /// Runs one playback and completes when the player is dismissed.
   Future<void> play(FnOsItem item) async {
@@ -100,20 +102,36 @@ final class FnOsPlayback {
       _durationHint = (((map['item'] as Map?)?['duration'] ?? map['duration']) as num?)?.toInt() ?? 0;
       final ts = (map['ts'] as num?)?.toInt() ?? 0;
 
-      final url = client.directStreamUrl(_mediaGuid);
-      debugPrint('[fnos] play ${item.displayTitle} media=$_mediaGuid start=$ts headers=${client.imageHeaders.length}');
-      // The web player opens a stream session before serving media/range; do
-      // the same so the server has the media registered. Failures are fine —
-      // direct play works against FlyNarwhal without it too.
+      // Default play shape: the NAS media/range proxy for local files. The
+      // stream call may resolve a cloud/STRM link that replaces it.
+      var url = client.directStreamUrl(_mediaGuid);
+      var playHeaders = client.imageHeaders;
+      _playLink = '/v/api/v1/media/range/$_mediaGuid';
+
+      debugPrint('[fnos] play ${item.displayTitle} media=$_mediaGuid start=$ts');
+      // The web player opens a stream session before serving media/range; the
+      // response also carries the cloud/STRM playback info (cloud_storage_info,
+      // direct_link_qualities, provider header). Local files tolerate a failed
+      // stream call; cloud-backed ones need it for the resolved URL.
+      Object? streamData;
       try {
-        await client.stream(_mediaGuid);
+        streamData = await client.stream(_mediaGuid);
       } catch (e) {
         debugPrint('[fnos] stream session: $e');
+      }
+      if (streamData is Map) {
+        final resolved = _resolveStreamUrl(streamData);
+        if (resolved != null) {
+          url = resolved.url;
+          playHeaders = resolved.headers;
+          _playLink = resolved.playLink;
+          debugPrint('[fnos] resolved cloud type=${resolved.cloudType} url=${Uri.parse(url).host}');
+        }
       }
       backend.load(
         Uri.parse(url),
         start: ts > 0 ? Duration(seconds: ts) : null,
-        headers: client.imageHeaders,
+        headers: playHeaders,
       );
       // mpv errors surface as PlayerLoadError; if nothing happens at all
       // (command rejected, network silently stuck) fail visibly instead of
@@ -143,6 +161,70 @@ final class FnOsPlayback {
   String? _s(Map m, String key) {
     final v = m[key]?.toString();
     return v == null || v.isEmpty ? null : v;
+  }
+
+  /// Picks the playable URL for cloud-backed media from the `/stream`
+  /// response, mirroring FlyNarwhal's `getDirectPlayLink` matrix:
+  ///
+  /// - STRM (9001): the NAS already resolved the .strm content into a playable
+  ///   URL, so play it directly — the web player never routes STRM through the
+  ///   media/range proxy.
+  /// - Aliyun (2) / 123 (5) / 115 non-m3u8 (3): play the raw CDN link directly.
+  /// - 115 m3u8: rewrite through the /wp/m3u8 proxy.
+  /// - Baidu (1) / Quark (4) / unknown providers: NAS proxy with the quality
+  ///   index so the server selects the matching CDN link.
+  ///
+  /// Direct CDN requests carry only the provider headers from the stream
+  /// response (`header`); NAS-proxied ones carry NAS auth plus the provider
+  /// headers in `X-Wp-Header`. Returns null for plain local files.
+  _ResolvedStream? _resolveStreamUrl(Map streamData) {
+    final cloud = streamData['cloud_storage_info'];
+    final type = cloud is Map ? (cloud['cloud_storage_type'] as num?)?.toInt() : null;
+    if (type == null) return null;
+    final qualities = streamData['direct_link_qualities'];
+    final quality = qualities is List && qualities.isNotEmpty && qualities.first is Map
+        ? qualities.first as Map
+        : null;
+    final link = quality?['url']?.toString() ?? '';
+    if (link.isEmpty) {
+      // Cloud-backed media without a usable resolved link cannot play at all
+      // — fail visibly instead of letting the media/range proxy 404.
+      throw FnosException(-1, '网盘媒体未返回可播放链接（类型 $type）', streamData);
+    }
+    final isM3u8 = quality?['is_m3u8'] == true;
+    final header = streamData['header'];
+    final providerHeaders = <String, String>{
+      if (header is Map)
+        for (final e in header.entries)
+          if (e.value != null) e.key.toString(): e.value!.toString(),
+    };
+
+    // Direct CDN playback: never attach NAS credentials to a foreign host.
+    final directPlay = type == 9001 || type == 2 || type == 5 || (type == 3 && !isM3u8);
+    if (directPlay) {
+      return _ResolvedStream(type, link, providerHeaders, _stripOrigin(link));
+    }
+    if (type == 3) {
+      // 115 m3u8: proxy so segment URLs stay on the NAS.
+      final url = client.wpM3u8Url(link);
+      return _ResolvedStream(type, url, {...client.imageHeaders, ...providerHeaders},
+          _stripOrigin(url));
+    }
+    // NAS proxy with the quality index (Baidu/Quark/fallbacks).
+    final url = client.directStreamUrl(_mediaGuid, directLinkQualityIndex: 0);
+    final headers = {...client.imageHeaders};
+    if (providerHeaders.isNotEmpty) {
+      headers['X-Wp-Header'] = jsonEncode(header is Map ? header : providerHeaders);
+    }
+    return _ResolvedStream(type, url, headers, _stripOrigin(url));
+  }
+
+  /// Drops the `scheme://host[:port]` prefix so the recorded play link stays
+  /// relative for fnOS, matching what the web player persists.
+  static String _stripOrigin(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme) return url;
+    return uri.hasQuery ? '${uri.path}?${uri.query}' : uri.path;
   }
 
   void _osdState(String phase, FnOsItem item, {String? message}) {
@@ -202,7 +284,7 @@ final class FnOsPlayback {
         'bitrate': 0,
         'ts': ts,
         'duration': effectiveDuration,
-        'play_link': '/v/api/v1/media/range/$_mediaGuid',
+        'play_link': _playLink,
         'device_id': deviceId,
         'direct_link_audio_index': -1,
         'lan': 'zh-CN',
@@ -228,6 +310,16 @@ final class FnOsPlayback {
     _eventsSub?.cancel();
     if (!_done.isCompleted) _done.complete();
   }
+}
+
+/// One resolved playback target from the `/stream` response.
+final class _ResolvedStream {
+  const _ResolvedStream(this.cloudType, this.url, this.headers, this.playLink);
+
+  final int cloudType;
+  final String url;
+  final Map<String, String> headers;
+  final String playLink;
 }
 
 /// Launches fnOS playback from a UI context.

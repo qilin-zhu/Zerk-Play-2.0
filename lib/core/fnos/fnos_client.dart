@@ -252,7 +252,25 @@ final class FnosClient {
 
   /// Direct original-file range proxy for a media guid (FlyNarwhal's
   /// `buildDirectStreamUrl`); needs [imageHeaders]-style auth on the player.
-  String directStreamUrl(String mediaGuid) => '$base/v/api/v1/media/range/$mediaGuid';
+  /// Cloud media passes [directLinkQualityIndex] so the backend selects the
+  /// matching CDN link server-side (the web player's URL shape).
+  String directStreamUrl(String mediaGuid, {int? directLinkQualityIndex}) {
+    final index = directLinkQualityIndex;
+    if (index == null || index < 0) return '$base/v/api/v1/media/range/$mediaGuid';
+    return '$base/v/api/v1/media/range/$mediaGuid?direct_link_quality_index=$index';
+  }
+
+  /// `/wp/m3u8` proxy for 115 Pan m3u8 qualities (web player's
+  /// `R2.getM3u8Url`): the original CDN m3u8 is encoded into `originalUrl`
+  /// so the NAS rewrites segment URLs to stay reachable.
+  String wpM3u8Url(String qualityUrl, {int? audioTrackIndex}) {
+    final uri = Uri.parse(qualityUrl);
+    final proxied = uri.replace(queryParameters: {
+      ...uri.queryParameters,
+      if (audioTrackIndex != null && audioTrackIndex >= 0) 'audio_track': '$audioTrackIndex',
+    });
+    return '$base/v/api/v1/wp/m3u8?originalUrl=${Uri.encodeComponent(proxied.toString())}';
+  }
 
   static String _mergeCookies(String? existing, String setCookie) {
     final map = <String, String>{};
