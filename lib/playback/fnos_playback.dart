@@ -63,6 +63,53 @@ final class FnOsPlayback {
   String _playLink = '';
   String _trackSignature = '';
 
+  /// Target to try when the primary one fails to produce a frame. Cloud links
+  /// hand out a CDN URL that may be expired, geo-blocked or served without the
+  /// headers ExoPlayer sends; the NAS proxy re-resolves the same media on the
+  /// server, so it is the natural second attempt.
+  String? _retryUrl;
+  Map<String, String> _retryHeaders = const {};
+  String? _retryMime;
+  bool _retried = false;
+  int _resumeSeconds = 0;
+
+  void _startWatchdog(FnOsItem item) {
+    final backend = _backend;
+    if (backend == null) return;
+    _loadWatchdog?.cancel();
+    _loadWatchdog = Timer(const Duration(seconds: 30), () {
+      if (!_loaded && !_finishing) {
+        debugPrint('[fnos] load watchdog fired');
+        backend.osd('state', {
+          'phase': 'error',
+          'title': item.displayTitle,
+          'message': '无法连接飞牛的媒体流（30 秒无响应）',
+        });
+      }
+    });
+  }
+
+  /// Arms the NAS-proxy fallback used when the primary target fails.
+  ///
+  /// A cloud quality link can be expired, blocked for this network, or served
+  /// with requirements ExoPlayer does not meet, and the user only sees a dead
+  /// player. `media/range` re-resolves the same media on the NAS, so it is the
+  /// natural second attempt; local files already use it and skip this.
+  void _prepareRetry(Object? streamData, String url, String? mimeHint) {
+    _retryUrl = null;
+    if (streamData is! Map) return;
+    if (url.contains('/v/api/v1/media/range/')) return;
+    final cloud = streamData['cloud_storage_info'];
+    final type = cloud is Map ? (cloud['cloud_storage_type'] as num?)?.toInt() : null;
+    if (type == null || type == 0) return;
+    final headers = {...client.imageHeaders};
+    final header = streamData['header'];
+    if (header is Map && header.isNotEmpty) headers['X-Wp-Header'] = jsonEncode(header);
+    _retryUrl = client.directStreamUrl(_mediaGuid, directLinkQualityIndex: 0);
+    _retryHeaders = headers;
+    _retryMime = mimeHint;
+  }
+
   /// Runs one playback and completes when the player is dismissed.
   Future<void> play(FnOsItem item) async {
     _item = item;
@@ -163,6 +210,8 @@ final class FnOsPlayback {
       }
       debugPrint('[fnos] load ${Uri.parse(url).host}${Uri.parse(url).path} '
           'mime=$mimeHint headers=${playHeaders.keys.toList()..sort()}');
+      _resumeSeconds = ts;
+      _prepareRetry(streamData, url, mimeHint);
       backend.load(
         Uri.parse(url),
         start: ts > 0 ? Duration(seconds: ts) : null,
@@ -172,17 +221,7 @@ final class FnOsPlayback {
       // mpv errors surface as PlayerLoadError; if nothing happens at all
       // (command rejected, network silently stuck) fail visibly instead of
       // spinning forever.
-      _loadWatchdog?.cancel();
-      _loadWatchdog = Timer(const Duration(seconds: 30), () {
-        if (!_loaded && !_finishing) {
-          debugPrint('[fnos] load watchdog fired');
-          backend.osd('state', {
-            'phase': 'error',
-            'title': item.displayTitle,
-            'message': '无法连接飞牛的媒体流（30 秒无响应）',
-          });
-        }
-      });
+      _startWatchdog(item);
     } catch (e) {
       debugPrint('[fnos] play failed: $e');
       backend.osd('state', {
@@ -302,7 +341,9 @@ final class FnOsPlayback {
         _report(backend.state.value.position.inSeconds);
       case PlayerLoadError(:final message):
         final item = _item;
-        if (item != null) _osdState('error', item, message: message ?? '');
+        if (item == null) return;
+        if (_retryNas(item)) return;
+        _osdState('error', item, message: message ?? '');
       case PlayerOsdEvent(:final name, :final arg):
         switch (name) {
           case 'back':
@@ -317,6 +358,27 @@ final class FnOsPlayback {
       case PlayerShutdown():
         unawaited(_finish());
     }
+  }
+
+  /// One automatic retry through the NAS proxy; returns false when there is
+  /// nothing left to try (the caller then shows the error).
+  bool _retryNas(FnOsItem item) {
+    final url = _retryUrl;
+    final backend = _backend;
+    if (_retried || url == null || backend == null || _finishing) return false;
+    _retried = true;
+    _retryUrl = null;
+    debugPrint('[fnos] primary target failed, retrying via NAS proxy');
+    _playLink = _stripOrigin(url);
+    _osdState('loading', item);
+    backend.load(
+      Uri.parse(url),
+      start: _resumeSeconds > 0 ? Duration(seconds: _resumeSeconds) : null,
+      headers: _retryHeaders,
+      mimeType: _retryMime,
+    );
+    _startWatchdog(item);
+    return true;
   }
 
   void _onState() {
