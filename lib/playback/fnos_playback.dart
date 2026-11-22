@@ -229,6 +229,23 @@ final class FnOsPlayback {
           debugPrint('[fnos] resolved cloud type=${resolved.cloudType} url=${Uri.parse(url).host}');
         }
       }
+      // fnOS answers `media/range` with an HLS playlist — not the original
+      // bytes — whenever the file cannot be served as-is (container or codec it
+      // will not remux). The `is_m3u8` flag on the cloud link says nothing
+      // about that, so the response shape is checked before the player is
+      // pointed at it. Media3 only recognises a playlist from the URL
+      // extension, and `media/range/{guid}` has none: every progressive
+      // extractor then rejects the `#EXTM3U` text with
+      // PARSING_CONTAINER_UNSUPPORTED. mpv hides this on desktop because
+      // ffmpeg sniffs the playlist itself.
+      if (mimeHint == null && _cdnProxy == null) {
+        // The loopback proxy already proved it carries container bytes, so it
+        // never needs this extra round trip.
+        mimeHint = await _sniffMime(url, playHeaders);
+        if (mimeHint != null) {
+          debugPrint('[fnos] sniffed $mimeHint for ${Uri.parse(url).path}');
+        }
+      }
       debugPrint('[fnos] load $_link ${Uri.parse(url).host}${Uri.parse(url).path} '
           'mime=$mimeHint headers=${playHeaders.keys.toList()..sort()}');
       _resumeSeconds = ts;
@@ -361,6 +378,39 @@ final class FnOsPlayback {
     });
   }
 
+  /// Reports a playlist hint for [url] when the server answers with an HLS
+  /// manifest instead of media bytes.
+  ///
+  /// 飞牛's `media/range` endpoint serves an HLS playlist for anything it will
+  /// not hand out verbatim (MKV/TrueHD/unsupported codecs), with no file
+  /// extension and no `is_m3u8` flag to announce it. Reading the first bytes
+  /// is the only reliable way to tell Media3 which media source to build.
+  Future<String?> _sniffMime(String url, Map<String, String> headers) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6)
+      ..badCertificateCallback =
+          acceptInvalidCertificates ? (_, _, _) => true : null;
+    try {
+      final req = await client.getUrl(Uri.parse(url));
+      req.headers.set(HttpHeaders.rangeHeader, 'bytes=0-63');
+      headers.forEach(req.headers.set);
+      final res = await req.close().timeout(const Duration(seconds: 6));
+      if (res.statusCode >= 400) return null;
+      final buf = <int>[];
+      await for (final chunk in res.timeout(const Duration(seconds: 6))) {
+        buf.addAll(chunk);
+        if (buf.length >= 64) break;
+      }
+      final text = String.fromCharCodes(buf).trimLeft();
+      if (text.startsWith('#EXTM3U')) return 'application/x-mpegURL';
+      return null;
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   /// Shows the failure, with what the transport actually served for that URL.
   ///
   /// A container error from Media3 says nothing about *why* it could not parse
@@ -379,8 +429,7 @@ final class FnOsPlayback {
     _osdState('error', item, message: text);
   }
 
-  Future<String> _inspectHead(String url, Map<String, String> headers) async {
-    final client = HttpClient()
+  Future<String> _inspectHead(String url, Map<String, String> headers) async {    final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 8)
       ..badCertificateCallback =
           acceptInvalidCertificates ? (_, _, _) => true : null;
