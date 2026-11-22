@@ -146,7 +146,9 @@ class _DanmakuLayerState extends State<DanmakuLayer> {
       fontWeight: s.bold ? 6 : 4,
       opacity: s.opacity,
       area: 1,
-      duration: 12,
+      // Slower speed means a longer travel time, same relation as the mpv
+      // overlay's `DM.dur = DM_BASE_DUR / speed`.
+      duration: (12 / s.speed).clamp(4.0, 24.0),
       lineHeight: pitch / s.fontSize,
       strokeWidth: 1.6,
       // The bands are already laid out above the subtitle strip.
@@ -157,7 +159,7 @@ class _DanmakuLayerState extends State<DanmakuLayer> {
   /// Applies a changed option to the live controllers (settings load
   /// asynchronously after the first build).
   void _syncOption(DanmakuOption option, DanmakuSettings s) {
-    final signature = '${s.fontSize}/${s.lineGap}/${s.opacity}/${s.bold}';
+    final signature = '${s.fontSize}/${s.lineGap}/${s.opacity}/${s.bold}/${s.speed}';
     if (signature == _optionSignature) return;
     final first = _optionSignature.isEmpty;
     _optionSignature = signature;
