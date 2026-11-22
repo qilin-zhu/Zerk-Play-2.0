@@ -124,7 +124,14 @@ class _SettingsPageState extends State<SettingsPage> {
                       padding: const EdgeInsets.only(bottom: 6),
                       child: TvFocusable(
                         selectSound: null,
-                        onFocusChange: (f) => f ? setState(() => _section = s) : null,
+                        onFocusChange: (f) {
+                          if (!f || _section == s) return;
+                          // Logged next to the row taps below: a screenshot of
+                          // the wrong panel plus this line tells us whether the
+                          // section or the hit test is at fault.
+                          debugPrint('[settings] section -> ${s.name}');
+                          setState(() => _section = s);
+                        },
                         onSelect: () => ZoneNavigator.move(TraversalDirection.right),
                         builder: (context, focused) => AnimatedContainer(
                           duration: Zm.fast,
@@ -156,6 +163,17 @@ class _SettingsPageState extends State<SettingsPage> {
         Expanded(
           child: AnimatedSwitcher(
             duration: Zm.normal,
+            // The outgoing section stays in the tree while it fades out. It
+            // must never receive a click meant for the section that replaced
+            // it — that made rows open the previous category's panel (typing
+            // "界面" and getting 应用语言 was exactly this).
+            layoutBuilder: (current, previous) => Stack(
+              alignment: Alignment.center,
+              children: [
+                for (final child in previous) IgnorePointer(child: child),
+                ?current,
+              ],
+            ),
             child: KeyedSubtree(
               key: ValueKey(_section),
               child: FocusZone(

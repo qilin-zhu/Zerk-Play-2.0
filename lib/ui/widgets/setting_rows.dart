@@ -64,7 +64,12 @@ class SettingToggleRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return TvFocusable(
       selectSound: enabled ? UiSound.select : UiSound.bump,
-      onSelect: () => enabled ? onChanged(!value) : null,
+      onSelect: () {
+        // The settings log is the only way to tell which row a click actually
+        // landed on when rows appear to open the wrong panel.
+        debugPrint('[settings] toggle "$title" -> ${!value}');
+        if (enabled) onChanged(!value);
+      },
       builder: (context, focused) => _RowShell(
         focused: focused,
         title: title,
@@ -99,6 +104,7 @@ class SettingChoiceRow<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     return TvFocusable(
       onSelect: () async {
+        debugPrint('[settings] choice "$title" -> panel with ${options.length} option(s)');
         final chosen = await showSidePanel<T>(
           context,
           title: title,
@@ -283,7 +289,10 @@ class SettingActionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
-      onSelect: onSelect,
+      onSelect: () {
+        debugPrint('[settings] action "$title"');
+        onSelect();
+      },
       builder: (context, focused) =>
           _RowShell(focused: focused, title: title, subtitle: subtitle, trailing: Icon(icon, size: 30)),
     );
