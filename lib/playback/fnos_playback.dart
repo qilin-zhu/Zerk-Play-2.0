@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import '../app/app_services.dart';
 import '../core/fnos/fnos_client.dart';
 import '../core/fnos/fnos_item.dart';
+import '../core/fnos/fnos_playback_bus.dart';
 import '../core/fnos/quark_cdn_proxy.dart';
 import '../core/host.dart';
 import '../l10n/l10n.dart';
@@ -354,6 +355,10 @@ final class FnOsPlayback {
     _cdnProxy = null;
     await backend?.close();
     _eventsSub?.cancel();
+    // The final position went to play/record above, so the server's play/list
+    // is current: tell the home page to refetch its continue-watching row
+    // instead of waiting for the next login.
+    FnosPlaybackBus.notifyEnded();
     if (!_done.isCompleted) _done.complete();
   }
 }

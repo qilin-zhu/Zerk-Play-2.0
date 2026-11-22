@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../../app/app_services.dart';
 import '../../core/fnos/fnos_client.dart';
 import '../../core/fnos/fnos_item.dart';
+import '../../core/fnos/fnos_playback_bus.dart';
 import '../../core/log/app_log.dart';
 import '../../l10n/l10n.dart';
 import '../core/input_mode.dart';
@@ -67,6 +68,10 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   );
 
   List<FnOsItem> _resume = const [];
+
+  /// Guards the continue-watching refetch against an out-of-order response
+  /// (two playbacks finishing back-to-back, or a refresh racing [_reload]).
+  int _resumeToken = 0;
   List<FnOsMediaDb>? _libs;
   final _libItems = <String, List<FnOsItem>>{};
   bool _rowsDone = false;
@@ -155,6 +160,10 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
     super.initState();
     AppLog.write('[fnos] home build hero-v10 (no indicator dots, random carousel)');
     HardwareKeyboard.instance.addHandler(_watchKey);
+    // The shell keeps this page alive in an Offstage, so initState runs once:
+    // a finished playback has to poke the row itself or the poster keeps the
+    // position it had when the app started.
+    FnosPlaybackBus.revision.addListener(_onPlaybackEnded);
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
   }
 
@@ -168,6 +177,7 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
 
   @override
   void dispose() {
+    FnosPlaybackBus.revision.removeListener(_onPlaybackEnded);
     HardwareKeyboard.instance.removeHandler(_watchKey);
     _slideTimer?.cancel();
     _scroll.dispose();
@@ -183,6 +193,8 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   Future<void> _reload() async {
     if (_busy) return;
     _slideTimer?.cancel();
+    // Any refetch already in flight is now stale.
+    _resumeToken++;
     setState(() {
       _busy = true;
       _error = null;
@@ -224,6 +236,32 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
         _error = '$e';
         _busy = false;
       });
+    }
+  }
+
+  void _onPlaybackEnded() {
+    if (!mounted) return;
+    unawaited(_refreshResume());
+  }
+
+  /// Refetches only the continue-watching row after a playback session ends.
+  /// A full [_reload] would also reroll the hero carousel and rebuild every
+  /// library row just because one poster's progress changed.
+  Future<void> _refreshResume() async {
+    if (_busy) return;
+    final token = ++_resumeToken;
+    try {
+      final played = await _client.playList();
+      if (!mounted || token != _resumeToken) return;
+      if (played is! List) return;
+      final resume = [
+        for (final e in played)
+          if (e is Map) FnOsItem.from(e),
+      ].where((r) => r.isResumable).toList();
+      setState(() => _resume = resume);
+      AppLog.write('[fnos] resume refreshed: ${resume.length} entries');
+    } catch (e) {
+      debugPrint('[fnos] resume refresh: $e');
     }
   }
 

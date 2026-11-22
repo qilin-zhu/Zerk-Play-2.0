@@ -3,7 +3,10 @@ name: Build
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    # `test-build` compiles the same way but only publishes a pre-release (see
+    # the test_release job), so a build that is still being verified never
+    # lands on /releases/latest and never prompts clients to update.
+    branches: [main, test-build]
     paths-ignore:
       - '**.md'
       - 'screenshots/**'
@@ -16,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.8'
+  APP_VERSION: '2.10.9'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -27,6 +30,8 @@ jobs:
     name: Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Test builds only need the Windows player.
+    if: github.ref != 'refs/heads/test-build'
     steps:
       - uses: actions/checkout@v4
 
@@ -205,8 +210,7 @@ jobs:
     # Both platforms must succeed: a release that only carries one of them
     # looks like a broken download to whoever opens the console.
     needs: [android, windows]
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'    runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -261,3 +265,48 @@ jobs:
             Windows 端依赖 [libmpv](https://github.com/shinchiro/mpv-winbuild-cmake)，已经打包进安装目录，不用另外装。
 
             安装包默认装到当前用户目录（不弹 UAC），勾选「创建桌面快捷方式」或从开始菜单启动。
+
+  # Test builds are published as pre-releases so they stay out of
+  # /releases/latest: the update checker keeps pointing at the last stable
+  # version, and the tag carries the run number so every build gets its own.
+  test_release:
+    name: Publish test build
+    needs: [windows]
+    if: github.ref == 'refs/heads/test-build'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-packages
+          path: dist
+
+      - name: List packages
+        run: ls -lh dist
+
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-${{ env.APP_VERSION }}-${{ github.run_number }}
+          name: 测试版 ${{ env.APP_VERSION }}（构建 ${{ github.run_number }}）
+          # Never replaces the stable release clients check for updates.
+          make_latest: false
+          draft: false
+          prerelease: true
+          fail_on_unmatched_files: false
+          files: |
+            dist/ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip
+            dist/ZerkPlay-${{ env.APP_VERSION }}-setup.exe
+          body: |
+            **测试版 ${{ env.APP_VERSION }}**，只用来验证下面两项修复，不是正式版。
+
+            | 平台 | 文件 | 说明 |
+            | --- | --- | --- |
+            | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip` | 免安装，解压即用 |
+            | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包 |
+
+            **飞牛影视：看完一集后「继续观看」不更新的修复**
+            播放结束会把最终进度写回 `play/record`，首页随后重新拉 `play/list` 并只刷新「继续观看」这一行，不再需要重新登录。
+
+            **侧边栏新增刷新按钮**
+            设置按钮上方多了一个刷新入口，点击后用当前服务（Emby / Jellyfin / 飞牛影视）重新拉取全部页面数据，按下去会转一圈作为反馈。
+

@@ -103,6 +103,15 @@ class _ShellState extends State<Shell> {
   /// a node of its own to be reachable from the D-pad.
   final _logoNode = FocusNode(debugLabel: 'rail:logo');
 
+  /// Rail refresh entry, right above Settings: re-pulls the current server's
+  /// data (Emby/Jellyfin/fnOS alike) without signing out and back in.
+  final _refreshNode = FocusNode(debugLabel: 'rail:refresh');
+
+  /// Bumped by the rail refresh; every live page is keyed with it so the pages
+  /// rebuild from scratch, which re-runs their `initState` reload.
+  int _refreshEpoch = 0;
+  bool _refreshing = false;
+
   /// Where the switcher panel hangs: the follower tracks the logo's paint
   /// position, so the panel stays glued to the right of the mark even while the
   /// rail is still animating open.
@@ -228,7 +237,27 @@ class _ShellState extends State<Shell> {
       n.dispose();
     }
     _logoNode.dispose();
+    _refreshNode.dispose();
     super.dispose();
+  }
+
+  /// Rail refresh: drop every live page so they reload from the current server
+  /// (Emby, Jellyfin or 飞牛影视 — whichever session is active). Pages keep
+  /// their data in `initState`, so a rebuild is the only reliable way to make
+  /// all of them catch up after the library changed somewhere else.
+  void _refreshService() {
+    if (_refreshing) return;
+    final fnos = _isFnos;
+    AppLog.write('[shell] refresh ${fnos ? 'fnos' : 'emby'} tab=${_tab.name}');
+    setState(() {
+      _refreshing = true;
+      _refreshEpoch++;
+    });
+    // Feedback for the spinner: the pages reload on their own schedules, so the
+    // rail just shows that the press was taken.
+    Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _refreshing = false);
+    });
   }
 
   bool get _isFnos => _services.isSignedIn && _services.janus.session.kind == ServerKind.fnos;
@@ -368,7 +397,16 @@ class _ShellState extends State<Shell> {
                               offstage: t != _tab,
                               child: TickerMode(
                                 enabled: t == _tab,
-                                child: ExcludeFocus(excluding: t != _tab, child: _page(t)),
+                                child: ExcludeFocus(
+                                  excluding: t != _tab,
+                                  // Keyed by the refresh epoch: a rail refresh
+                                  // rebuilds the page from scratch, which re-runs
+                                  // its initState reload against the server.
+                                  child: KeyedSubtree(
+                                    key: ValueKey('${t.name}#$_refreshEpoch'),
+                                    child: _page(t),
+                                  ),
+                                ),
                               ),
                             ),
                         if (services.settings.homeClock && _tab == ShellTab.home)
@@ -417,6 +455,9 @@ class _ShellState extends State<Shell> {
                             menuOpen: _menuOpen,
                             logoNode: _logoNode,
                             logoLink: _logoLink,
+                            refreshNode: _refreshNode,
+                            refreshing: _refreshing,
+                            onRefresh: _refreshService,
                             onOpenServers: _openMenu,
                             onSelect: _select,
                             nodes: _railNodes,
@@ -523,6 +564,9 @@ class _Rail extends StatefulWidget {
     required this.menuOpen,
     required this.logoNode,
     required this.logoLink,
+    required this.refreshNode,
+    required this.refreshing,
+    required this.onRefresh,
     required this.onOpenServers,
     required this.onSelect,
     required this.nodes,
@@ -545,6 +589,12 @@ class _Rail extends StatefulWidget {
   final bool menuOpen;
   final FocusNode logoNode;
   final LayerLink logoLink;
+
+  /// Reload entry above Settings: spins while [_refreshing] is set.
+  final FocusNode refreshNode;
+  final bool refreshing;
+  final VoidCallback onRefresh;
+
   final VoidCallback onOpenServers;
   final ValueChanged<ShellTab> onSelect;
 
@@ -663,6 +713,15 @@ class _RailState extends State<_Rail> {
               },
           const Spacer(),
           if (tabs.contains(ShellTab.profile)) _item(ShellTab.profile),
+          _RailItem(
+            icon: Icons.refresh_rounded,
+            label: context.l10n.navRefresh,
+            node: widget.refreshNode,
+            selected: false,
+            expanded: expanded,
+            busy: widget.refreshing,
+            onSelect: widget.onRefresh,
+          ),
           _item(ShellTab.settings),
         ],
       ),
@@ -762,6 +821,7 @@ class _RailItem extends StatelessWidget {
     this.child = false,
     this.open,
     this.profile,
+    this.busy = false,
   });
 
   final ShellTab? tab;
@@ -776,6 +836,10 @@ class _RailItem extends StatelessWidget {
   final FocusNode node;
   final bool selected;
   final bool expanded;
+
+  /// Spins the glyph while the action behind it is running (rail refresh).
+  final bool busy;
+
   final VoidCallback onSelect;
 
   @override
@@ -823,13 +887,14 @@ class _RailItem extends StatelessWidget {
                       ),
                     )
                   else
-                    Icon(
-                      icon ?? tab!.icon,
+                    _RailGlyph(
+                      icon: icon ?? tab!.icon,
                       size: child ? 24 : 28,
                       color: fg,
                       // Collapsed, the rail floats over the artwork: a soft
                       // shadow keeps the glyph readable on bright posters.
-                      shadows: expanded ? null : const [Shadow(color: Color(0xB3000000), blurRadius: 12)],
+                      shadow: !expanded,
+                      busy: busy,
                     ),
                   if (expanded)
                     Expanded(
@@ -863,6 +928,73 @@ class _RailItem extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// Rail glyph that keeps a fixed footprint. While [busy] it spins, which is the
+/// only feedback a refresh can give: the reloads it starts finish on the pages'
+/// own schedules.
+class _RailGlyph extends StatefulWidget {
+  const _RailGlyph({
+    required this.icon,
+    required this.size,
+    required this.color,
+    required this.shadow,
+    this.busy = false,
+  });
+
+  final IconData icon;
+  final double size;
+  final Color color;
+  final bool shadow;
+  final bool busy;
+
+  @override
+  State<_RailGlyph> createState() => _RailGlyphState();
+}
+
+class _RailGlyphState extends State<_RailGlyph> with SingleTickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.busy) _spin.repeat();
+  }
+
+  @override
+  void didUpdateWidget(_RailGlyph old) {
+    super.didUpdateWidget(old);
+    if (widget.busy == old.busy) return;
+    if (widget.busy) {
+      _spin.repeat();
+    } else {
+      // Finish the turn already in progress so the icon never snaps back.
+      _spin.animateTo(1, duration: const Duration(milliseconds: 240))
+          .whenComplete(() => _spin.value = 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RotationTransition(
+      turns: _spin,
+      child: Icon(
+        widget.icon,
+        size: widget.size,
+        color: widget.color,
+        shadows: widget.shadow ? const [Shadow(color: Color(0xB3000000), blurRadius: 12)] : null,
       ),
     );
   }
