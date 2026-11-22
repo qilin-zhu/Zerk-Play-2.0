@@ -111,6 +111,7 @@ final class FnOsPlayback {
       // stream call may resolve a cloud/STRM link that replaces it.
       var url = client.directStreamUrl(_mediaGuid);
       var playHeaders = client.imageHeaders;
+      String? mimeHint;
       _playLink = '/v/api/v1/media/range/$_mediaGuid';
 
       debugPrint('[fnos] play ${item.displayTitle} media=$_mediaGuid start=$ts');
@@ -130,6 +131,9 @@ final class FnOsPlayback {
           url = resolved.url;
           playHeaders = resolved.headers;
           _playLink = resolved.playLink;
+          // Media3 decides between HLS and progressive from the URL extension,
+          // and the proxied playlist URL has none.
+          if (resolved.isHls) mimeHint = 'application/x-mpegURL';
           if (resolved.cdnUpstream != null) {
             final proxy = QuarkCdnProxy(
               upstream: resolved.cdnUpstream!,
@@ -158,11 +162,12 @@ final class FnOsPlayback {
         }
       }
       debugPrint('[fnos] load ${Uri.parse(url).host}${Uri.parse(url).path} '
-          'headers=${playHeaders.keys.toList()..sort()}');
+          'mime=$mimeHint headers=${playHeaders.keys.toList()..sort()}');
       backend.load(
         Uri.parse(url),
         start: ts > 0 ? Duration(seconds: ts) : null,
         headers: playHeaders,
+        mimeType: mimeHint,
       );
       // mpv errors surface as PlayerLoadError; if nothing happens at all
       // (command rejected, network silently stuck) fail visibly instead of
@@ -241,13 +246,13 @@ final class FnOsPlayback {
     // Direct CDN playback: never attach NAS credentials to a foreign host.
     final directPlay = type == 9001 || type == 2 || type == 5 || (type == 3 && !isM3u8);
     if (directPlay) {
-      return _ResolvedStream(type, link, providerHeaders, _stripOrigin(link));
+      return _ResolvedStream(type, link, providerHeaders, _stripOrigin(link), isHls: isM3u8);
     }
     if (type == 3) {
       // 115 m3u8: proxy so segment URLs stay on the NAS.
       final url = client.wpM3u8Url(link);
       return _ResolvedStream(type, url, {...client.imageHeaders, ...providerHeaders},
-          _stripOrigin(url));
+          _stripOrigin(url), isHls: true);
     }
     if (type == 4 && !isM3u8) {
       // Quark: the CDN throttles every TCP connection (measured ~0.09 MB/s on
@@ -264,7 +269,7 @@ final class FnOsPlayback {
     if (providerHeaders.isNotEmpty) {
       headers['X-Wp-Header'] = jsonEncode(header is Map ? header : providerHeaders);
     }
-    return _ResolvedStream(type, url, headers, _stripOrigin(url));
+    return _ResolvedStream(type, url, headers, _stripOrigin(url), isHls: isM3u8);
   }
 
   /// Drops the `scheme://host[:port]` prefix so the recorded play link stays
@@ -470,12 +475,15 @@ final class FnOsPlayback {
 /// One resolved playback target from the `/stream` response.
 final class _ResolvedStream {
   const _ResolvedStream(this.cloudType, this.url, this.headers, this.playLink,
-      {this.cdnUpstream, this.cdnHeaders = const {}});
+      {this.cdnUpstream, this.cdnHeaders = const {}, this.isHls = false});
 
   final int cloudType;
   final String url;
   final Map<String, String> headers;
   final String playLink;
+
+  /// The target is an HLS playlist, whatever the URL looks like.
+  final bool isHls;
 
   /// Non-null for Quark: [url] must be replaced by the local parallel-range
   /// proxy serving [cdnUpstream] with [cdnHeaders].

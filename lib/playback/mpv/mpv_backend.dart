@@ -186,7 +186,14 @@ final class MpvBackend implements PlayerBackend {
   }
 
   @override
-  void load(Uri url, {Duration? start, int? audioOrdinal, int? subtitleOrdinal, String? dolbyVision, Map<String, String>? headers}) {
+  void load(Uri url,
+      {Duration? start,
+      int? audioOrdinal,
+      int? subtitleOrdinal,
+      String? dolbyVision,
+      Map<String, String>? headers,
+      // mpv sniffs the container itself, so the hint is only for Media3.
+      String? mimeType}) {
     final opts = <String>[
       if (start != null && start > Duration.zero) 'start=${start.inMilliseconds / 1000}',
       'aid=${audioOrdinal ?? 'auto'}',

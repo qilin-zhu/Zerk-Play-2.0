@@ -106,7 +106,7 @@ abstract interface class PlayerBackend {
 
   Future<void> open();
 
-  void load(Uri url, {Duration? start, int? audioOrdinal, int? subtitleOrdinal, String? dolbyVision, Map<String, String>? headers});
+  void load(Uri url, {Duration? start, int? audioOrdinal, int? subtitleOrdinal, String? dolbyVision, Map<String, String>? headers, String? mimeType});
 
   void selectTrack(String type, String? id);
 

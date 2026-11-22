@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.10'
+  APP_VERSION: '2.10.11'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -305,14 +305,11 @@ jobs:
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包 |
             | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
 
-            **安卓端播放飞牛非 strm 资源报错**
-            安卓播放器之前把 Dart 侧传过来的请求头丢掉了，飞牛的 `media/range` 原文件代理没有查询串鉴权，缺 Authorization/Cookie 直接 401。现在请求头会带到每一条 HTTP range 请求上。
+            **安卓端部分在线影视（含 115 等 m3u8 条目）播放失败**
+            Media3 只从 URL 扩展名判断是不是 HLS 播放列表，而飞牛的播放列表走 `/v/api/v1/wp/m3u8?originalUrl=…` 没有扩展名，ExoPlayer 把 m3u8 当成普通 MP4 解析，直接报错。现在播放链路会把「这是 HLS」明确告诉原生播放器。
 
-            **安卓端播放页缺少音频 / 字幕按钮**
-            飞牛播放链路此前没有把播放器解析到的音轨/字幕轨推给播放页，按钮因列表为空而不显示。现在按播放器实际轨道生成，并支持切换音轨、字幕与关闭字幕。
-
-            **飞牛影视：看完一集后「继续观看」不更新**
-            播放结束会把最终进度写回 `play/record`，首页随后重新拉 `play/list` 并只刷新「继续观看」这一行，不再需要重新登录。
+            **安卓端弹幕最大行数设置无效**
+            弹幕层以前完全没读「滚动 / 顶部 / 底部最大行数」，只按屏幕 70% 高度铺满，所以设 3 行仍会挤出十几行。现在按设置分成上、中、下三条独立显示带，每条带的行数严格等于设置值，同时行间距与加粗也生效，和 Windows 端 mpv 弹幕行为一致。
 
             **侧边栏新增刷新按钮**
             设置按钮上方多了一个刷新入口，点击后用当前服务（Emby / Jellyfin / 飞牛影视）重新拉取全部页面数据，按下去会转一圈作为反馈。

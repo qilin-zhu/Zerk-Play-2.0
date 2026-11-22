@@ -186,6 +186,7 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
                         call.argument<Int>("sub"),
                         call.argument<String>("dolbyVision"),
                         call.argument<Map<String, String>>("headers"),
+                        call.argument<String>("mimeType"),
                     )
                     result.success(null)
                 }
@@ -495,15 +496,25 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
         subtitles = null
         subtitleShadow = null
         mediaUrl = null
+        mediaMime = null
         requestHeaders = emptyMap()
         externalSubs.clear()
     }
 
-    private fun load(url: Uri, startMs: Long, audio: Int?, sub: Int?, dolbyVision: String?, headers: Map<String, String>?) {
+    private fun load(
+        url: Uri,
+        startMs: Long,
+        audio: Int?,
+        sub: Int?,
+        dolbyVision: String?,
+        headers: Map<String, String>?,
+        mimeType: String?,
+    ) {
         val exo = player ?: throw IllegalStateException("Player not open")
         mediaUrl = url
+        mediaMime = mimeType
         requestHeaders = headers ?: emptyMap()
-        Log.i(TAG, "load ${url.host}${url.path} headers=${requestHeaders.keys.sorted()}")
+        Log.i(TAG, "load ${url.host}${url.path} mime=$mimeType headers=${requestHeaders.keys.sorted()}")
         val profile = dolbyVision?.substringAfter('.')?.substringBefore('.')?.toIntOrNull()
         copiedDolbyVision = dolbyVision?.takeIf { profile in DeviceCaps.dolbyVisionProfiles }
         externalSubs.clear()
@@ -526,10 +537,19 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
         exo.playWhenReady = true
     }
 
+    /**
+     * Container hint handed over by Dart. Media3 only infers the type from the
+     * URL extension, and 飞牛's playlists arrive through `/v/api/v1/wp/m3u8`
+     * (no extension), so without this ExoPlayer tries to parse an HLS playlist
+     * as progressive media and fails outright.
+     */
+    private var mediaMime: String? = null
+
     private fun buildItem(): MediaItem {
         val url = mediaUrl!!
         val builder = MediaItem.Builder().setUri(url).setSubtitleConfigurations(externalSubs.toList())
-        if (url.path?.endsWith(".m3u8") == true) builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        val mime = mediaMime ?: if (url.path?.endsWith(".m3u8") == true) MimeTypes.APPLICATION_M3U8 else null
+        if (mime != null) builder.setMimeType(mime)
         return builder.build()
     }
 

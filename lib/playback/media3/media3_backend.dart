@@ -90,7 +90,13 @@ final class Media3Backend implements PlayerBackend {
   }
 
   @override
-  void load(Uri url, {Duration? start, int? audioOrdinal, int? subtitleOrdinal, String? dolbyVision, Map<String, String>? headers}) {
+  void load(Uri url,
+      {Duration? start,
+      int? audioOrdinal,
+      int? subtitleOrdinal,
+      String? dolbyVision,
+      Map<String, String>? headers,
+      String? mimeType}) {
     _state.value = const PlayerState();
     _call('load', {
       'url': url.toString(),
@@ -99,6 +105,9 @@ final class Media3Backend implements PlayerBackend {
       'sub': subtitleOrdinal,
       'dolbyVision': dolbyVision,
       if (headers != null && headers.isNotEmpty) 'headers': headers,
+      // Media3 infers the container from the URL extension only; proxied
+      // playlists (`/wp/m3u8?originalUrl=…`) have none, so the caller tells us.
+      if (mimeType != null && mimeType.isNotEmpty) 'mimeType': mimeType,
     });
   }
 
