@@ -157,6 +157,8 @@ final class FnOsPlayback {
           debugPrint('[fnos] resolved cloud type=${resolved.cloudType} url=${Uri.parse(url).host}');
         }
       }
+      debugPrint('[fnos] load ${Uri.parse(url).host}${Uri.parse(url).path} '
+          'headers=${playHeaders.keys.toList()..sort()}');
       backend.load(
         Uri.parse(url),
         start: ts > 0 ? Duration(seconds: ts) : null,

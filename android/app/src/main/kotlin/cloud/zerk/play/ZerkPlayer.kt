@@ -503,6 +503,7 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
         val exo = player ?: throw IllegalStateException("Player not open")
         mediaUrl = url
         requestHeaders = headers ?: emptyMap()
+        Log.i(TAG, "load ${url.host}${url.path} headers=${requestHeaders.keys.sorted()}")
         val profile = dolbyVision?.substringAfter('.')?.substringBefore('.')?.toIntOrNull()
         copiedDolbyVision = dolbyVision?.takeIf { profile in DeviceCaps.dolbyVisionProfiles }
         externalSubs.clear()
