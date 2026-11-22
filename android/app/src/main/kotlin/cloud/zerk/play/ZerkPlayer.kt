@@ -30,8 +30,10 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.text.Cue
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -107,6 +109,15 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
     private var mediaUrl: Uri? = null
     private val externalSubs = mutableListOf<MediaItem.SubtitleConfiguration>()
 
+    /**
+     * Per-media HTTP headers handed over by the Dart side (飞牛's original-file
+     * `media/range` proxy and cloud providers both require Authorization /
+     * Cookie / Referer on every request, including each range request).
+     * Read by the DataSource factory below when a request is created, so the
+     * value in effect at `load()` time applies to the whole media item.
+     */
+    @Volatile private var requestHeaders: Map<String, String> = emptyMap()
+
     private var pendingAudio: Int? = null
     private var pendingSub: Int? = null
     private var pendingExternalId: String? = null
@@ -174,6 +185,7 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
                         call.argument<Int>("audio"),
                         call.argument<Int>("sub"),
                         call.argument<String>("dolbyVision"),
+                        call.argument<Map<String, String>>("headers"),
                     )
                     result.success(null)
                 }
@@ -327,8 +339,22 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000)
+        // Media3 has no per-MediaItem header API, so the headers are applied to
+        // every HTTP data source built for the current item. Without this the
+        // 飞牛 media/range proxy answers 401 (it has no query-string auth) and
+        // cloud provider links that need Cookie/Referer fail outright.
+        val httpWithHeaders = DataSource.Factory {
+            val source = http.createDataSource()
+            val headers = requestHeaders
+            if (headers.isNotEmpty() && source is HttpDataSource) {
+                for ((name, value) in headers) {
+                    if (name.isNotEmpty() && value.isNotEmpty()) source.setRequestProperty(name, value)
+                }
+            }
+            source
+        }
         val exo = ExoPlayer.Builder(activity, renderers)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(activity, http)))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(activity, httpWithHeaders)))
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
                 true,
@@ -469,12 +495,14 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
         subtitles = null
         subtitleShadow = null
         mediaUrl = null
+        requestHeaders = emptyMap()
         externalSubs.clear()
     }
 
-    private fun load(url: Uri, startMs: Long, audio: Int?, sub: Int?, dolbyVision: String?) {
+    private fun load(url: Uri, startMs: Long, audio: Int?, sub: Int?, dolbyVision: String?, headers: Map<String, String>?) {
         val exo = player ?: throw IllegalStateException("Player not open")
         mediaUrl = url
+        requestHeaders = headers ?: emptyMap()
         val profile = dolbyVision?.substringAfter('.')?.substringBefore('.')?.toIntOrNull()
         copiedDolbyVision = dolbyVision?.takeIf { profile in DeviceCaps.dolbyVisionProfiles }
         externalSubs.clear()
@@ -664,6 +692,13 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
                     "external" to external,
                     "url" to extIndex?.let { externalSubs.getOrNull(it)?.uri?.toString() },
                     "selected" to group.isTrackSelected(t),
+                    // Container metadata for the OSD track picker: mkv/mp4 carry
+                    // a language tag and often a track title, and the codec is
+                    // what tells two audio tracks apart when titles are absent.
+                    "language" to format.language,
+                    "label" to format.label?.toString(),
+                    "codec" to format.sampleMimeType?.substringAfterLast('/'),
+                    "channels" to format.channelCount.takeIf { it > 0 },
                 )
             }
         }

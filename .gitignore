@@ -23,6 +23,8 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+# Local test-build downloads kept out of the repository (large binaries).
+/dist-test/
 
 app.*.symbols
 app.*.map.json

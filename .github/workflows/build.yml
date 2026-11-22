@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.9'
+  APP_VERSION: '2.10.10'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -30,8 +30,6 @@ jobs:
     name: Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Test builds only need the Windows player.
-    if: github.ref != 'refs/heads/test-build'
     steps:
       - uses: actions/checkout@v4
 
@@ -272,14 +270,14 @@ jobs:
   # version, and the tag carries the run number so every build gets its own.
   test_release:
     name: Publish test build
-    needs: [windows]
+    needs: [windows, android]
     if: github.ref == 'refs/heads/test-build'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: windows-packages
           path: dist
+          merge-multiple: true
 
       - name: List packages
         run: ls -lh dist
@@ -297,15 +295,23 @@ jobs:
           files: |
             dist/ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip
             dist/ZerkPlay-${{ env.APP_VERSION }}-setup.exe
+            dist/ZerkPlay-${{ env.APP_VERSION }}-android.apk
           body: |
-            **测试版 ${{ env.APP_VERSION }}**，只用来验证下面两项修复，不是正式版。
+            **测试版 ${{ env.APP_VERSION }}**，用来验证下面几项修复，不是正式版。
 
             | 平台 | 文件 | 说明 |
             | --- | --- | --- |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip` | 免安装，解压即用 |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包 |
+            | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
 
-            **飞牛影视：看完一集后「继续观看」不更新的修复**
+            **安卓端播放飞牛非 strm 资源报错**
+            安卓播放器之前把 Dart 侧传过来的请求头丢掉了，飞牛的 `media/range` 原文件代理没有查询串鉴权，缺 Authorization/Cookie 直接 401。现在请求头会带到每一条 HTTP range 请求上。
+
+            **安卓端播放页缺少音频 / 字幕按钮**
+            飞牛播放链路此前没有把播放器解析到的音轨/字幕轨推给播放页，按钮因列表为空而不显示。现在按播放器实际轨道生成，并支持切换音轨、字幕与关闭字幕。
+
+            **飞牛影视：看完一集后「继续观看」不更新**
             播放结束会把最终进度写回 `play/record`，首页随后重新拉 `play/list` 并只刷新「继续观看」这一行，不再需要重新登录。
 
             **侧边栏新增刷新按钮**

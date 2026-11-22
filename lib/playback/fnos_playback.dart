@@ -12,6 +12,7 @@ import '../core/fnos/quark_cdn_proxy.dart';
 import '../core/host.dart';
 import '../l10n/l10n.dart';
 import 'kept_display.dart';
+import 'language.dart';
 import 'platform_player.dart';
 import 'player_backend.dart';
 import 'player_settings.dart';
@@ -60,6 +61,7 @@ final class FnOsPlayback {
   String? _subtitleGuid;
   int _durationHint = 0;
   String _playLink = '';
+  String _trackSignature = '';
 
   /// Runs one playback and completes when the player is dismissed.
   Future<void> play(FnOsItem item) async {
@@ -216,8 +218,11 @@ final class FnOsPlayback {
         : null;
     final link = quality?['url']?.toString() ?? '';
     if (link.isEmpty) {
-      // Cloud-backed media without a usable resolved link cannot play at all
-      // — fail visibly instead of letting the media/range proxy 404.
+      // Local files carry no cloud entry at all (type 0 or absent): they play
+      // through the media/range proxy, so there is nothing to resolve here.
+      // A real cloud provider without a resolved link cannot play at all —
+      // fail visibly instead of letting the media/range proxy 404.
+      if (type == 0) return null;
       throw FnosException(-1, '网盘媒体未返回可播放链接（类型 $type）', streamData);
     }
     final isM3u8 = quality?['is_m3u8'] == true;
@@ -291,8 +296,17 @@ final class FnOsPlayback {
       case PlayerLoadError(:final message):
         final item = _item;
         if (item != null) _osdState('error', item, message: message ?? '');
-      case PlayerOsdEvent(:final name):
-        if (name == 'back') unawaited(_finish());
+      case PlayerOsdEvent(:final name, :final arg):
+        switch (name) {
+          case 'back':
+            unawaited(_finish());
+          case 'audio':
+            // The picker ids are the backend's own track ids; keep them as-is.
+            backend.selectTrack('audio', arg);
+          case 'sub':
+            // '-1' is the picker's "off" entry; null disables the text track.
+            backend.selectTrack('sub', arg == null || arg == '-1' ? null : arg);
+        }
       case PlayerShutdown():
         unawaited(_finish());
     }
@@ -301,12 +315,100 @@ final class FnOsPlayback {
   void _onState() {
     final s = _backend?.state.value;
     if (s == null) return;
+    _pushTracks();
     if (s.ended && !_ended) {
       _ended = true;
       _report(s.duration.inSeconds > 0 ? s.duration.inSeconds : s.position.inSeconds);
       unawaited(_finish());
     }
   }
+
+  /// Publishes the audio/subtitle picker for backends that expose their track
+  /// list (Media3 on Android). fnOS never says which streams a file has — the
+  /// container does — so the entries come from the running player. The mpv
+  /// backend draws its own OSD and ignores these, exactly like before.
+  void _pushTracks() {
+    final backend = _backend;
+    final tracks = backend?.state.value.tracks;
+    if (backend == null || tracks == null) return;
+    final signature = tracks.map((t) => '${t.id}|${t.selected}').join(',');
+    if (signature == _trackSignature) return;
+    _trackSignature = signature;
+    List<Map<String, Object?>> of(String type, String fallback) {
+      final list = tracks.where((t) => t.type == type && !t.external).toList();
+      return [
+        for (final (i, t) in list.indexed)
+          {
+            'id': t.id,
+            'label': _trackLabel(t, fallback, i + 1),
+            'detail': _trackDetail(t),
+            'selected': t.selected,
+          },
+      ];
+    }
+
+    backend.osd('tracks', {
+      'audio': of('audio', l10n.audio),
+      'subs': of('sub', l10n.subtitles),
+    });
+  }
+
+  String _trackLabel(PlayerTrack t, String fallback, int number) {
+    final title = t.label?.trim() ?? '';
+    if (title.isNotEmpty) return title;
+    final code = normalizeLanguage(t.language);
+    if (code.isNotEmpty) {
+      final name = languageNames[code];
+      if (name != null && name.isNotEmpty) return name;
+    }
+    return '$fallback $number';
+  }
+
+  String _trackDetail(PlayerTrack t) {
+    final parts = <String>[];
+    final codec = _codecName(t.codec);
+    if (codec.isNotEmpty) parts.add(codec);
+    if (t.type == 'audio') {
+      final ch = _channelName(t.channels);
+      if (ch != null) parts.add(ch);
+    }
+    return parts.join('  ·  ');
+  }
+
+  static String _codecName(String? raw) {
+    final c = (raw ?? '').toLowerCase();
+    if (c.isEmpty) return '';
+    return switch (c) {
+      'truehd' => 'Dolby TrueHD',
+      'eac3' || 'ec-3' => 'E-AC-3',
+      'ac3' => 'AC-3',
+      'dts' || 'dca' => 'DTS',
+      'aac' || 'mp4a-latm' => 'AAC',
+      'flac' => 'FLAC',
+      'opus' => 'Opus',
+      'vorbis' => 'Vorbis',
+      'mpeg' || 'mp3' => 'MP3',
+      'subrip' || 'srt' => 'SRT',
+      'ssa' || 'ass' => 'ASS',
+      'pgs' || 'pgssub' => 'PGS',
+      'vobsub' || 'dvdsub' => 'VobSub',
+      'webvtt' || 'vtt' => 'WebVTT',
+      'ttml' || 'mp4text' || 'mov_text' => 'TTML',
+      _ when c.startsWith('pcm') => 'PCM',
+      _ => c.toUpperCase(),
+    };
+  }
+
+  static String? _channelName(int? channels) => switch (channels) {
+        1 => 'Mono',
+        2 => 'Stereo',
+        3 => '2.1',
+        6 => '5.1',
+        7 => '6.1',
+        8 => '7.1',
+        final n? when n > 0 => '$n ch',
+        _ => null,
+      };
 
   /// fnOS play/record (mirrors FlyNarwhal's PlayRecordRequest).
   Future<void> _report(int ts) async {

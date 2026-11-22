@@ -11,6 +11,10 @@ final class PlayerTrack {
     this.external = false,
     this.externalUrl,
     this.selected = false,
+    this.language,
+    this.label,
+    this.codec,
+    this.channels,
   });
 
   final String id;
@@ -23,6 +27,13 @@ final class PlayerTrack {
   final bool external;
   final String? externalUrl;
   final bool selected;
+
+  /// Container metadata, when the backend can see it (Media3 does; mpv only
+  /// exposes it through its own OSD). Used to label the audio/subtitle picker.
+  final String? language;
+  final String? label;
+  final String? codec;
+  final int? channels;
 }
 
 final class PlayerState {

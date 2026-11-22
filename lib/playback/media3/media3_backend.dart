@@ -205,6 +205,10 @@ final class Media3Backend implements PlayerBackend {
             external: t['external'] == true,
             externalUrl: t['url'] as String?,
             selected: t['selected'] == true,
+            language: t['language'] as String?,
+            label: t['label'] as String?,
+            codec: t['codec'] as String?,
+            channels: (t['channels'] as num?)?.toInt(),
           ),
       ],
     );
