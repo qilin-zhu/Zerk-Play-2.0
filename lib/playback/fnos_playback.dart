@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -61,6 +62,14 @@ final class FnOsPlayback {
   String? _subtitleGuid;
   int _durationHint = 0;
   String _playLink = '';
+  /// Which transport the current attempt uses (`nas`, `cdn`, `cdn+proxy`,
+  /// `nas-m3u8`) — surfaced in the error text so a screenshot from a TV is
+  /// enough to tell where the failure happened.
+  String _link = 'nas';
+  /// Last target handed to the backend, kept so a failure can be re-read.
+  String? _curUrl;
+  Map<String, String> _curHeaders = const {};
+  String? _curMime;
   String _trackSignature = '';
 
   /// Target to try when the primary one fails to produce a frame. Cloud links
@@ -188,16 +197,28 @@ final class FnOsPlayback {
             );
             try {
               final proxied = await proxy.start();
+              // Ask the loopback server for the first bytes before handing the
+              // URL to the player: on a TV the only feedback is an error
+              // string, so a proxy that cannot even serve the container head
+              // is treated as broken and the NAS proxy takes over.
+              final check = await proxy.selfCheck();
+              debugPrint('[fnos] quark cdn proxy self-check: $check');
+              if (!check.startsWith('ok')) {
+                throw StateError('proxy self-check failed: $check');
+              }
               _cdnProxy = proxy;
               url = proxied.toString();
               playHeaders = const {};
+              _link = 'cdn+proxy';
               debugPrint('[fnos] quark cdn proxy: $url (upstream ${resolved.cdnUpstream!.host})');
             } catch (e) {
               await proxy.stop();
-              // The parallel-range proxy failed to start (bind/probe error):
-              // fall back to the NAS media/range proxy, slow but playable.
+              // The parallel-range proxy failed to start or cannot serve the
+              // stream: fall back to the NAS media/range proxy, slow but
+              // playable.
               url = client.directStreamUrl(_mediaGuid, directLinkQualityIndex: 0);
               playHeaders = {...client.imageHeaders};
+              _link = 'nas';
               final header = streamData['header'];
               if (header is Map && header.isNotEmpty) {
                 playHeaders['X-Wp-Header'] = jsonEncode(header);
@@ -208,10 +229,13 @@ final class FnOsPlayback {
           debugPrint('[fnos] resolved cloud type=${resolved.cloudType} url=${Uri.parse(url).host}');
         }
       }
-      debugPrint('[fnos] load ${Uri.parse(url).host}${Uri.parse(url).path} '
+      debugPrint('[fnos] load $_link ${Uri.parse(url).host}${Uri.parse(url).path} '
           'mime=$mimeHint headers=${playHeaders.keys.toList()..sort()}');
       _resumeSeconds = ts;
       _prepareRetry(streamData, url, mimeHint);
+      _curUrl = url;
+      _curHeaders = playHeaders;
+      _curMime = mimeHint;
       backend.load(
         Uri.parse(url),
         start: ts > 0 ? Duration(seconds: ts) : null,
@@ -281,15 +305,22 @@ final class FnOsPlayback {
         for (final e in header.entries)
           if (e.value != null) e.key.toString(): flatten(e.value),
     };
+    // Provider hosts expect the browser identity that resolved the link, and
+    // the stream response usually carries only a Cookie.
+    if (!providerHeaders.keys.any((k) => k.toLowerCase() == 'user-agent')) {
+      providerHeaders['User-Agent'] = FnosClient.webUserAgent;
+    }
 
     // Direct CDN playback: never attach NAS credentials to a foreign host.
     final directPlay = type == 9001 || type == 2 || type == 5 || (type == 3 && !isM3u8);
     if (directPlay) {
+      _link = 'cdn';
       return _ResolvedStream(type, link, providerHeaders, _stripOrigin(link), isHls: isM3u8);
     }
     if (type == 3) {
       // 115 m3u8: proxy so segment URLs stay on the NAS.
       final url = client.wpM3u8Url(link);
+      _link = 'nas-m3u8';
       return _ResolvedStream(type, url, {...client.imageHeaders, ...providerHeaders},
           _stripOrigin(url), isHls: true);
     }
@@ -308,6 +339,7 @@ final class FnOsPlayback {
     if (providerHeaders.isNotEmpty) {
       headers['X-Wp-Header'] = jsonEncode(header is Map ? header : providerHeaders);
     }
+    _link = 'nas';
     return _ResolvedStream(type, url, headers, _stripOrigin(url), isHls: isM3u8);
   }
 
@@ -329,6 +361,52 @@ final class FnOsPlayback {
     });
   }
 
+  /// Shows the failure, with what the transport actually served for that URL.
+  ///
+  /// A container error from Media3 says nothing about *why* it could not parse
+  /// the stream, and on a TV the message string is the only artefact a user
+  /// can send back — so the same request is replayed once and its status,
+  /// content type and first bytes are appended. A `1a45dfa3` (mkv) or
+  /// `000000..ftyp` head with HTTP 206 means the data is fine and the failure
+  /// is inside the decoder; an HTML/JSON head means the link handed out the
+  /// wrong thing.
+  Future<void> _fail(FnOsItem item, String? message) async {
+    final url = _curUrl;
+    final detail = url == null ? 'no url' : await _inspectHead(url, _curHeaders);
+    final text = '[$_link] ${message ?? ''}\n$detail';
+    debugPrint('[fnos] playback failed: $text');
+    if (_finishing) return;
+    _osdState('error', item, message: text);
+  }
+
+  Future<String> _inspectHead(String url, Map<String, String> headers) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 8)
+      ..badCertificateCallback =
+          acceptInvalidCertificates ? (_, _, _) => true : null;
+    try {
+      final req = await client.getUrl(Uri.parse(url));
+      req.headers.set(HttpHeaders.rangeHeader, 'bytes=0-31');
+      headers.forEach(req.headers.set);
+      final res = await req.close().timeout(const Duration(seconds: 10));
+      final buf = <int>[];
+      await for (final chunk in res.timeout(const Duration(seconds: 10))) {
+        buf.addAll(chunk);
+        if (buf.length >= 32) break;
+      }
+      final hex =
+          buf.take(32).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final ascii = String.fromCharCodes(
+          buf.take(16).map((b) => b >= 32 && b < 127 ? b : 0x2e));
+      return 'http=${res.statusCode} ctype=${res.headers.contentType} '
+          'mime=$_curMime head=$hex ($ascii)';
+    } catch (e) {
+      return 'inspect failed: $e';
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   void _onEvent(PlayerEvent event) {
     final backend = _backend;
     if (backend == null) return;
@@ -343,7 +421,10 @@ final class FnOsPlayback {
         final item = _item;
         if (item == null) return;
         if (_retryNas(item)) return;
-        _osdState('error', item, message: message ?? '');
+        // The error text is all a TV user can see, so it carries the transport
+        // that failed: `nas` (media/range), `cdn` (provider link) or
+        // `cdn+proxy` (loopback parallel-range proxy).
+        unawaited(_fail(item, message));
       case PlayerOsdEvent(:final name, :final arg):
         switch (name) {
           case 'back':
@@ -370,6 +451,10 @@ final class FnOsPlayback {
     _retryUrl = null;
     debugPrint('[fnos] primary target failed, retrying via NAS proxy');
     _playLink = _stripOrigin(url);
+    _link = 'nas';
+    _curUrl = url;
+    _curHeaders = _retryHeaders;
+    _curMime = _retryMime;
     _osdState('loading', item);
     backend.load(
       Uri.parse(url),

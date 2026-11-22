@@ -30,6 +30,11 @@ final class FnosClient {
   static const _userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
 
+  /// The browser User-Agent the web player uses. Cloud links resolved by the
+  /// NAS are meant to be fetched by a browser, so any request that goes to a
+  /// provider host has to keep this identity.
+  static String get webUserAgent => _userAgent;
+
   final String base;
   String? _token;
   String? _cookie;

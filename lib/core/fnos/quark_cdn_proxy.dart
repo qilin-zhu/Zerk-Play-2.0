@@ -30,6 +30,7 @@ final class QuarkCdnProxy {
   final Set<HttpClientRequest> _inflight = {};
   final Set<Socket> _sockets = {};
   HttpServer? _server;
+  Uri? _localUri;
   int? _totalLength;
   String? _contentType;
   bool _closed = false;
@@ -52,7 +53,9 @@ final class QuarkCdnProxy {
     }
     _server = server;
     server.listen((request) => unawaited(_serve(request)), onError: (_) {});
-    return Uri(scheme: 'http', host: '127.0.0.1', port: server.port, path: _path);
+    final uri = Uri(scheme: 'http', host: '127.0.0.1', port: server.port, path: _path);
+    _localUri = uri;
+    return uri;
   }
 
   Future<void> stop() async {
@@ -68,6 +71,7 @@ final class QuarkCdnProxy {
     _sockets.clear();
     await _server?.close(force: true);
     _server = null;
+    _localUri = null;
   }
 
   /// One tiny range request to learn `Content-Range: bytes 0-0/TOTAL`.
@@ -231,6 +235,13 @@ final class QuarkCdnProxy {
 
   /// Downloads one chunk with retries and an idle watchdog (a throttled CDN
   /// connection can stall forever — abort and retry instead).
+  ///
+  /// The CDN is allowed to answer with *more* than was asked for: Quark always
+  /// aligns a `bytes=0-0` probe out to 64 bytes, and some edges pad small
+  /// ranges the same way. Insisting on an exact length made those responses
+  /// look like failures and starved the player, so anything at or past the
+  /// requested range is accepted (and trimmed) and only a genuine short read
+  /// is retried.
   Future<Uint8List?> _fetchChunk(int start, int endIncl) async {
     final expected = endIncl - start + 1;
     for (var attempt = 0; attempt < maxChunkAttempts; attempt++) {
@@ -258,11 +269,17 @@ final class QuarkCdnProxy {
           idle = DateTime.now();
           builder.add(chunk);
           got += chunk.length;
+          // Enough already: stop pulling so an over-long (or un-ranged)
+          // response cannot hold the reader hostage for the whole file.
+          if (got >= expected) break;
         }
-        if (got != expected) {
+        if (got < expected) {
           throw HttpException('CDN short read $got/$expected');
         }
-        return builder.takeBytes();
+        final bytes = builder.takeBytes();
+        return bytes.length == expected
+            ? bytes
+            : Uint8List.sublistView(bytes, 0, expected);
       } catch (_) {
         if (_closed) return null;
         if (attempt + 1 < maxChunkAttempts) {
@@ -277,5 +294,56 @@ final class QuarkCdnProxy {
       }
     }
     return null;
+  }
+
+  /// Fetches the first bytes back through the loopback server.
+  ///
+  /// A TV gives us nothing but an on-screen error string, so the proxy checks
+  /// itself before the player ever touches it: if the bytes that come out of
+  /// `127.0.0.1` do not look like the container the CDN is serving, the
+  /// caller falls back to the NAS proxy instead of showing a black screen.
+  Future<String> selfCheck() async {
+    final local = _localUri;
+    if (local == null) return 'not started';
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final req = await client.getUrl(local);
+      req.headers.set(HttpHeaders.rangeHeader, 'bytes=0-15');
+      final res = await req.close().timeout(const Duration(seconds: 15));
+      final bytes = <int>[];
+      await for (final chunk in res.timeout(const Duration(seconds: 15))) {
+        bytes.addAll(chunk);
+        if (bytes.length >= 16) break;
+      }
+      final head = bytes.take(16).toList();
+      final hex = head.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final ok = _looksLikeMedia(head);
+      return '${ok ? 'ok' : 'bad'} http=${res.statusCode} '
+          'ctype=${res.headers.contentType} len=${res.contentLength} head=$hex';
+    } catch (e) {
+      return 'error $e';
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// EBML (mkv/webm), ISO-BMFF (`ftyp` at offset 4), RIFF, MPEG-TS, FLV, Ogg —
+  /// the containers a 飞牛 library can hand out directly.
+  static bool _looksLikeMedia(List<int> h) {
+    bool at(int i, List<int> sig) {
+      if (h.length < i + sig.length) return false;
+      for (var k = 0; k < sig.length; k++) {
+        if (h[i + k] != sig[k]) return false;
+      }
+      return true;
+    }
+
+    return at(0, [0x1a, 0x45, 0xdf, 0xa3]) || // EBML / matroska
+        at(4, [0x66, 0x74, 0x79, 0x70]) || // ....ftyp
+        at(0, [0x52, 0x49, 0x46, 0x46]) || // RIFF
+        at(0, [0x47]) || // MPEG-TS sync byte
+        at(0, [0x46, 0x4c, 0x56]) || // FLV
+        at(0, [0x4f, 0x67, 0x67, 0x53]) || // OggS
+        at(0, [0x49, 0x44, 0x33]); // ID3 (mp3/aac with tags)
   }
 }

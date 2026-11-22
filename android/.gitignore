@@ -10,3 +10,9 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# The release identity is committed on purpose: every GitHub build has to be
+# signed by the same key, or Android rejects installing one APK over another
+# ("signatures do not match"). Keep these two negations last so they win.
+!key.properties
+!**/*.jks

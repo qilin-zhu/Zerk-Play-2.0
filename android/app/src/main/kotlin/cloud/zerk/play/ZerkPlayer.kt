@@ -336,7 +336,6 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             .setEnableDecoderFallback(true)
         val http = DefaultHttpDataSource.Factory()
-            .setUserAgent("ZerkPlay/2.0 (Android TV)")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000)
@@ -344,10 +343,18 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
         // every HTTP data source built for the current item. Without this the
         // 飞牛 media/range proxy answers 401 (it has no query-string auth) and
         // cloud provider links that need Cookie/Referer fail outright.
+        //
+        // The User-Agent must not go through Factory.setUserAgent(): Media3
+        // applies that *after* the per-request properties, so it silently
+        // overwrote the browser UA 飞牛 hands out with the CDN link and made
+        // some providers answer with an error page instead of the file.
         val httpWithHeaders = DataSource.Factory {
             val source = http.createDataSource()
             val headers = requestHeaders
-            if (headers.isNotEmpty() && source is HttpDataSource) {
+            if (source is HttpDataSource) {
+                if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                    source.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+                }
                 for ((name, value) in headers) {
                     if (name.isNotEmpty() && value.isNotEmpty()) source.setRequestProperty(name, value)
                 }
@@ -770,7 +777,31 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
 
     override fun onPlayerError(error: PlaybackException) {
         Log.w(TAG, "playback error", error)
-        emit(mapOf("event" to "error", "message" to "${error.errorCodeName}: ${error.cause?.message ?: error.message}"))
+        // On a TV the message is the only artefact the user can send back, so
+        // it names the URL that failed and walks the whole cause chain instead
+        // of reporting just the outermost (always generic) message.
+        val chain = generateSequence<Throwable>(error) { it.cause }
+            .take(6)
+            .mapNotNull { t ->
+                val code = (t as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                when {
+                    code != null -> "${t.javaClass.simpleName}(HTTP $code)"
+                    t.message.isNullOrBlank() -> null
+                    else -> t.message!!.take(200)
+                }
+            }
+            .distinct()
+            .joinToString(" <- ")
+        val where = mediaUrl?.let {
+            val port = if (it.port > 0) ":${it.port}" else ""
+            "${it.scheme}://${it.host}$port${it.path?.take(48) ?: ""}"
+        } ?: "-"
+        emit(
+            mapOf(
+                "event" to "error",
+                "message" to "${error.errorCodeName} @ $where mime=$mediaMime :: $chain",
+            )
+        )
     }
 
     private fun emitState() {
@@ -844,6 +875,7 @@ class ZerkPlayer(private val activity: Activity, messenger: BinaryMessenger) :
 
     companion object {
         private const val TAG = "ZerkPlayer"
+        private const val DEFAULT_USER_AGENT = "ZerkPlay/2.0 (Android TV)"
         private const val AUDIO_RESELECT_TIMEOUT_MS = 1_000L
         private val TRAILING_NUMBER = Regex("""(\d+)$""")
         private val SUBTITLE_STREAM_INDEX = Regex("""CurrentSubtitleStreamIndex=(\d+)""")

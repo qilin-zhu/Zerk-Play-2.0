@@ -47,7 +47,13 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.findByName("upload")?.takeIf { playStore } ?: signingConfigs.getByName("debug")
+            // Every GitHub build must be signed with the same key, otherwise
+            // Android refuses to install one over the other ("signatures do
+            // not match"). The runner's debug keystore is generated per job
+            // with a random key, so falling back to it made each APK unique.
+            // android/key.properties points at the committed keystore, so both
+            // the test builds and the stable release share one identity.
+            signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
             proguardFiles("proguard-rules.pro")
         }
     }
