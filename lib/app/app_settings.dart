@@ -86,6 +86,7 @@ final class AppSettings {
     this.homeCollections = const {},
     this.cardTrailers = true,
     this.updateMirrorUrl = '',
+    this.episodesDescending = false,
   });
 
   final String seerrUrl;
@@ -134,6 +135,11 @@ final class AppSettings {
   /// GitHub. Set to a ghproxy-style base (see Updater.defaultMirror) when
   /// GitHub is unreachable, e.g. from mainland China.
   final String updateMirrorUrl;
+
+  /// Show later episodes first in an episode row. Long-running shows put the
+  /// episode you actually want (the new one) at the far end of the row
+  /// otherwise, which means a lot of scrolling on a remote.
+  final bool episodesDescending;
 
   List<(String, String)> homeCollectionsOf(String userId) => homeCollections[userId] ?? const [];
 
@@ -185,6 +191,7 @@ final class AppSettings {
     Map<String, List<(String, String)>>? homeCollections,
     bool? cardTrailers,
     String? updateMirrorUrl,
+    bool? episodesDescending,
   }) =>
       AppSettings(
         seerrUrl: seerrUrl ?? this.seerrUrl,
@@ -214,6 +221,7 @@ final class AppSettings {
         homeCollections: homeCollections ?? this.homeCollections,
         cardTrailers: cardTrailers ?? this.cardTrailers,
         updateMirrorUrl: updateMirrorUrl ?? this.updateMirrorUrl,
+        episodesDescending: episodesDescending ?? this.episodesDescending,
       );
 
   static Future<bool> exist() async => (await SharedPreferences.getInstance()).containsKey(_key);
@@ -265,6 +273,7 @@ final class AppSettings {
         },
         cardTrailers: Host.isAndroid && j['cardTrailersV'] != 2 ? false : j['cardTrailers'] as bool? ?? !Host.isAndroid,
         updateMirrorUrl: j['updateMirror'] as String? ?? '',
+        episodesDescending: j['episodesDescending'] as bool? ?? false,
       );
     } catch (_) {
       return AppSettings(cardTrailers: !Host.isAndroid);
@@ -306,6 +315,7 @@ final class AppSettings {
         'cardTrailers': cardTrailers,
         'cardTrailersV': 2,
         'updateMirror': updateMirrorUrl,
+        'episodesDescending': episodesDescending,
       }),
     );
   }

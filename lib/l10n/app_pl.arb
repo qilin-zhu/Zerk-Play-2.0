@@ -286,6 +286,8 @@
   "goToSeries": "Przejdź do serialu",
   "episodes": "Odcinki",
   "nowShowing": "Teraz w kinach",
+  "episodesAscending": "Najstarsze pierwsze",
+  "episodesDescending": "Najnowsze pierwsze",
   "moreLikeThis": "Podobne tytuły",
   "couldNotLoadTitle": "Nie można wczytać tego tytułu",
   "tryAgain": "Spróbuj ponownie",

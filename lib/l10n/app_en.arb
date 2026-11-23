@@ -592,6 +592,14 @@
   "goToSeries": "Go to series",
   "episodes": "Episodes",
   "nowShowing": "Now showing",
+  "episodesAscending": "Oldest first",
+  "@episodesAscending": {
+    "description": "Episode order toggle on a season row, currently 1, 2, 3…"
+  },
+  "episodesDescending": "Newest first",
+  "@episodesDescending": {
+    "description": "Episode order toggle on a season row, currently …3, 2, 1"
+  },
   "moreLikeThis": "More like this",
   "couldNotLoadTitle": "Could not load this title",
   "tryAgain": "Try again",

@@ -286,6 +286,8 @@
   "goToSeries": "Aller à la série",
   "episodes": "Épisodes",
   "nowShowing": "À l'affiche",
+  "episodesAscending": "Plus anciens d'abord",
+  "episodesDescending": "Plus récents d'abord",
   "moreLikeThis": "Titres similaires",
   "couldNotLoadTitle": "Impossible de charger ce titre",
   "tryAgain": "Réessayer",

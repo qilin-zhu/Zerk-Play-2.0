@@ -322,6 +322,8 @@
   "goToSeries": "前往剧集",
   "episodes": "单集",
   "nowShowing": "正在播放",
+  "episodesAscending": "正序",
+  "episodesDescending": "倒序",
   "moreLikeThis": "类似推荐",
   "couldNotLoadTitle": "无法加载此条目",
   "tryAgain": "重试",

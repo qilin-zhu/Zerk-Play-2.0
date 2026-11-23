@@ -286,6 +286,8 @@
   "goToSeries": "Zur Serie",
   "episodes": "Folgen",
   "nowShowing": "Jetzt im Kino",
+  "episodesAscending": "Älteste zuerst",
+  "episodesDescending": "Neueste zuerst",
   "moreLikeThis": "Ähnliche Titel",
   "couldNotLoadTitle": "Dieser Titel konnte nicht geladen werden",
   "tryAgain": "Erneut versuchen",

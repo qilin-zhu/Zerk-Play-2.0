@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import '../focus/focus_zone.dart';
+import '../focus/tv_focusable.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
 import 'scroll_arrows.dart';
@@ -21,6 +22,8 @@ class MediaRow extends StatefulWidget {
     this.trailingTitle,
     this.gap = Zs.cardGap,
     this.left = contentLeft,
+    this.initialIndex,
+    this.itemExtent,
   });
 
   final double left;
@@ -33,21 +36,48 @@ class MediaRow extends StatefulWidget {
   final double height;
   final double gap;
 
+  /// Item to line up with [left] the first time the row appears, instead of
+  /// starting at the first card. Used by the details page so that opening
+  /// episode 201 doesn't show episode 1. Needs [itemExtent] to compute the
+  /// offset, because the cards beyond the viewport are not laid out yet.
+  final int? initialIndex;
+
+  /// Card width plus [gap].
+  final double? itemExtent;
+
   @override
   State<MediaRow> createState() => _MediaRowState();
 }
 
 class _MediaRowState extends State<MediaRow> {
-  late final _controller = RevealController(mode: RevealMode.anchored, anchor: widget.left);
+  RevealController? _controller;
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
+  }
+
+  /// Where a card at [MediaRow.initialIndex] would sit after the row has been
+  /// anchored on it. The content is the same arithmetic the anchored reveal
+  /// does later, just applied before the first layout instead of after.
+  double _initialOffset(BuildContext context) {
+    final index = widget.initialIndex;
+    final extent = widget.itemExtent;
+    if (index == null || extent == null || index <= 0) return 0;
+    final viewport = MediaQuery.sizeOf(context).width;
+    final content = widget.itemCount * extent - widget.gap + 2 * widget.left;
+    final max = (content - viewport).clamp(0.0, double.infinity);
+    return (index * extent).clamp(0.0, max);
   }
 
   @override
   Widget build(BuildContext context) {
+    final controller = _controller ??= RevealController(
+      mode: RevealMode.anchored,
+      anchor: widget.left,
+      initialScrollOffset: _initialOffset(context),
+    );
     return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
       Padding(
         padding: EdgeInsets.only(left: widget.left, bottom: 18),
@@ -59,12 +89,12 @@ class _MediaRowState extends State<MediaRow> {
       SizedBox(
         height: widget.height,
         child: PointerScrollArrows(
-          controller: _controller,
+          controller: controller,
           leftInset: widget.left,
           child: FocusZone(
             debugLabel: 'row:${widget.title}',
             child: ListView.separated(
-              controller: _controller,
+              controller: controller,
               scrollDirection: Axis.horizontal,
               clipBehavior: Clip.none,
               scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
@@ -77,6 +107,41 @@ class _MediaRowState extends State<MediaRow> {
         ),
       ),
     ]);
+  }
+}
+
+/// Small focusable chip for a row's title line - the episode sort toggle sits
+/// here rather than among the action buttons, since it acts on the row below
+/// it and not on the title itself.
+class RowTitleButton extends StatelessWidget {
+  const RowTitleButton({super.key, required this.label, this.icon, this.onSelect, this.focusNode});
+
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onSelect;
+  final FocusNode? focusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      focusNode: focusNode,
+      onSelect: onSelect,
+      builder: (context, focused) => AnimatedContainer(
+        duration: Zm.fast,
+        curve: Zm.curve,
+        height: 42,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: focused ? Colors.white : Colors.white.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(21),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (icon != null) Icon(icon, size: 20, color: focused ? Zc.background : Zc.textMuted),
+          if (icon != null) const SizedBox(width: 8),
+          Text(label, style: Zt.label.copyWith(fontSize: 19, color: focused ? Zc.background : Zc.textMuted)),
+        ]),
+      ),
+    );
   }
 }
 

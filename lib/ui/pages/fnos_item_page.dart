@@ -37,6 +37,8 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
   String? _seasonGuid;
   String? _error;
   bool _busy = false;
+  final _episodeNode = FocusNode(debugLabel: 'fnos-episode-current');
+  bool _episodeFocusPending = true;
 
   FnosClient get _client => AppServicesScope.read(context).janus.fnos!;
 
@@ -44,6 +46,12 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
+  }
+
+  @override
+  void dispose() {
+    _episodeNode.dispose();
+    super.dispose();
   }
 
   String? _s(Map m, String key) {
@@ -137,6 +145,10 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
       setState(() {
         _episodes = [for (final e in list) if (e is Map) Map<String, Object?>.from(e)];
       });
+      if (_episodeFocusPending) {
+        _episodeFocusPending = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrentEpisode());
+      }
     } catch (e) {
       debugPrint('[fnos] episode list $guid: $e');
       if (!mounted) return;
@@ -144,11 +156,45 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     }
   }
 
+  List<Map<String, Object?>> _orderedEpisodes(bool descending) {
+    int numOf(Map<String, Object?> m, String key) => (m[key] as num?)?.toInt() ?? 0;
+    final indexed = _episodes.indexed.toList()
+      ..sort((a, b) {
+        final bySeason = numOf(a.$2, 'season_number').compareTo(numOf(b.$2, 'season_number'));
+        if (bySeason != 0) return bySeason;
+        final byEpisode = numOf(a.$2, 'episode_number').compareTo(numOf(b.$2, 'episode_number'));
+        return byEpisode != 0 ? byEpisode : a.$1.compareTo(b.$1);
+      });
+    final ordered = [for (final (_, e) in indexed) e];
+    return descending ? ordered.reversed.toList() : ordered;
+  }
+
+  Future<void> _toggleEpisodeOrder() async {
+    final s = AppServicesScope.read(context);
+    final next = !s.settings.episodesDescending;
+    debugPrint('[fnos] episode order -> ${next ? 'descending' : 'ascending'}');
+    await s.updateSettings(s.settings.copyWith(episodesDescending: next));
+  }
+
+  /// Puts focus on the row of the episode this page was opened on; the whole
+  /// season can be 200 rows long, so starting at the first one means scrolling
+  /// past all of them.
+  void _focusCurrentEpisode() {
+    if (!mounted) return;
+    final target = _episodeNode.context;
+    if (target == null) return;
+    _episodeNode.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && target.mounted) revealFocused(target);
+    });
+  }
+
   FnOsItem _itemOf(Map m) => FnOsItem.from(m);
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
+    final descending = AppServicesScope.of(context).settings.episodesDescending;
     final detail = _detail;
     final type = (detail == null ? widget.seed?.type : detail['type']?.toString())?.toLowerCase() ?? '';
     final playable = type == 'movie' || type == 'video' || type == 'episode';
@@ -208,14 +254,25 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
                     const SizedBox(height: 36),
                     Padding(
                       padding: EdgeInsets.only(left: contentLeft, right: 120, bottom: 14),
-                      child: Text(l10n.episodes, style: Zt.title),
+                      child: Row(children: [
+                        Text(l10n.episodes, style: Zt.title),
+                        const SizedBox(width: 18),
+                        FocusZone(
+                          debugLabel: 'fnos-episode-order',
+                          child: RowTitleButton(
+                            label: descending ? l10n.episodesDescending : l10n.episodesAscending,
+                            icon: Icons.swap_vert_rounded,
+                            onSelect: () => unawaited(_toggleEpisodeOrder()),
+                          ),
+                        ),
+                      ]),
                     ),
                     FocusZone(
                       debugLabel: 'fnos-episodes',
                       child: Padding(
                         padding: EdgeInsets.only(left: contentLeft, right: 120),
                         child: Column(children: [
-                          for (final e in _episodes) _episodeRow(context, e),
+                          for (final e in _orderedEpisodes(descending)) _episodeRow(context, e),
                         ]),
                       ),
                     ),
@@ -439,6 +496,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     final watched = episode['watched']?.toString() == '1' || episode['is_watched']?.toString() == '1';
     final poster = _s(episode, 'poster');
     return TvFocusable(
+      focusNode: current ? _episodeNode : null,
       onSelect: () => unawaited(playFnOs(context, _itemOf(episode))),
       builder: (context, focused) => Container(
         margin: const EdgeInsets.only(bottom: 14),

@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.14'
+  APP_VERSION: '2.10.15'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -305,12 +305,9 @@ jobs:
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包 |
             | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
 
-            **安卓端部分在线影视（含 115 等 m3u8 条目）播放失败**
-            Media3 只从 URL 扩展名判断是不是 HLS 播放列表，而飞牛的播放列表走 `/v/api/v1/wp/m3u8?originalUrl=…` 没有扩展名，ExoPlayer 把 m3u8 当成普通 MP4 解析，直接报错。现在播放链路会把「这是 HLS」明确告诉原生播放器。
+            **打开某一集时，焦点落在这一集上**
+            以前不管点的是第几集，进来以后焦点都在上面的播放按钮，剧集行还是从第 1 集开始显示 —— 打开第 201 集要自己横着翻两百个海报。现在进来就会把剧集行滚到当前这一集，焦点直接落在它的海报上。Emby、Jellyfin、飞牛影视三个服务都是这样。
 
-            **安卓端弹幕最大行数设置无效**
-            弹幕层以前完全没读「滚动 / 顶部 / 底部最大行数」，只按屏幕 70% 高度铺满，所以设 3 行仍会挤出十几行。现在按设置分成上、中、下三条独立显示带，每条带的行数严格等于设置值，同时行间距与加粗也生效，和 Windows 端 mpv 弹幕行为一致。
-
-            **侧边栏新增刷新按钮**
-            设置按钮上方多了一个刷新入口，点击后用当前服务（Emby / Jellyfin / 飞牛影视）重新拉取全部页面数据，按下去会转一圈作为反馈。
+            **剧集行新增排序按钮**
+            剧集行的标题右边多了一个「正序 / 倒序」按钮，按一下就整体反过来，长剧集可以先看最新一集。选择会记住，下次打开还是这个顺序。
 

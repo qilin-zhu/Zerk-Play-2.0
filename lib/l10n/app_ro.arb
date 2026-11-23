@@ -286,6 +286,8 @@
   "goToSeries": "Mergi la serial",
   "episodes": "Episoade",
   "nowShowing": "Episodul curent",
+  "episodesAscending": "Cele mai vechi întâi",
+  "episodesDescending": "Cele mai noi întâi",
   "moreLikeThis": "Asemănătoare",
   "couldNotLoadTitle": "Titlul nu a putut fi încărcat",
   "tryAgain": "Încearcă din nou",

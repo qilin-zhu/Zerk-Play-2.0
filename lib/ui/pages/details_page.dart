@@ -58,6 +58,8 @@ class _DetailsPageState extends State<DetailsPage> {
   List<SeerrMedia> _collectionRequestable = const [];
   final _scroll = RevealController(mode: RevealMode.minimal, margin: 140);
   final _playNode = FocusNode(debugLabel: 'play');
+  final _episodeNode = FocusNode(debugLabel: 'episode-current');
+  bool _episodeFocusPending = true;
   late final _trailer = TrailerController(AppServicesScope.read(context));
   final _trailerNode = FocusNode(debugLabel: 'trailer');
 
@@ -72,6 +74,7 @@ class _DetailsPageState extends State<DetailsPage> {
   void dispose() {
     _scroll.dispose();
     _playNode.dispose();
+    _episodeNode.dispose();
     _trailer.dispose();
     _trailerNode.dispose();
     super.dispose();
@@ -119,7 +122,15 @@ class _DetailsPageState extends State<DetailsPage> {
       }
       if (item.isEpisode && item.seriesId != null) {
         s.catalog.episodes(item.seriesId!, seasonId: item.seasonId).then((v) {
-          if (mounted) setState(() => _siblings = v);
+          if (!mounted) return;
+          setState(() => _siblings = v);
+          if (_episodeFocusPending) {
+            _episodeFocusPending = false;
+            // The card for the episode being opened only exists once that
+            // list has been laid out, and the row starts at the right offset
+            // because MediaRow was just built with initialIndex.
+            WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrentEpisode());
+          }
         }).catchError((_) {});
       }
     } catch (e) {
@@ -175,6 +186,40 @@ class _DetailsPageState extends State<DetailsPage> {
       _audio = policy.audioIndex;
       _subtitle = policy.subtitleIndex;
     }
+  }
+
+  /// Episode list in display order. Servers return episodes in their own
+  /// order, which is not always by number, and the row is scrolled to the
+  /// current episode by index - so the order has to be deterministic.
+  List<EmbyItem> _orderedSiblings(bool descending) {
+    final indexed = _siblings.indexed.toList()
+      ..sort((a, b) {
+        final byNumber = (a.$2.indexNumber ?? 0).compareTo(b.$2.indexNumber ?? 0);
+        return byNumber != 0 ? byNumber : a.$1.compareTo(b.$1);
+      });
+    final ordered = [for (final (_, e) in indexed) e];
+    return descending ? ordered.reversed.toList() : ordered;
+  }
+
+  Future<void> _toggleEpisodeOrder() async {
+    final s = AppServicesScope.read(context);
+    final next = !s.settings.episodesDescending;
+    debugPrint('[details] episode order -> ${next ? 'descending' : 'ascending'}');
+    await s.updateSettings(s.settings.copyWith(episodesDescending: next));
+  }
+
+  /// Moves focus from the play button to the poster of the episode this page
+  /// was opened on, so a 200-episode season doesn't start at episode one.
+  void _focusCurrentEpisode() {
+    if (!mounted) return;
+    final target = _episodeNode.context;
+    if (target == null) return;
+    // If focus already moved somewhere else the viewer is ahead of us.
+    if (_playNode.context != null && !_playNode.hasPrimaryFocus) return;
+    _episodeNode.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && target.mounted) revealFocused(target);
+    });
   }
 
   Future<void> _pickVersion() async {
@@ -315,6 +360,8 @@ class _DetailsPageState extends State<DetailsPage> {
     final resume = item.resumePosition;
     final audio = _source == null || _audio == null ? null : _source!.streamByIndex(_audio!);
     final sub = _source == null || _subtitle == null ? null : _source!.streamByIndex(_subtitle!);
+    final episodes = _orderedSiblings(s.settings.episodesDescending);
+    final currentIndex = episodes.indexWhere((e) => e.id == item.id);
 
     return Stack(children: [
       Positioned.fill(
@@ -413,22 +460,34 @@ class _DetailsPageState extends State<DetailsPage> {
             ),
           ),
           const SizedBox(height: 60),
-          if (_siblings.length > 1) ...[
+          if (episodes.length > 1) ...[
             MediaRow(
               left: pageLeft,
               title: item.seasonName ?? l10n.episodes,
               height: Zs.landscapeWidth * 9 / 16 + 90,
-              itemCount: _siblings.length,
+              itemCount: episodes.length,
+              itemExtent: Zs.landscapeWidth + Zs.cardGap,
+              initialIndex: currentIndex < 0 ? null : currentIndex,
+              trailingTitle: FocusZone(
+                debugLabel: 'episode-order',
+                child: RowTitleButton(
+                  label: s.settings.episodesDescending ? l10n.episodesDescending : l10n.episodesAscending,
+                  icon: Icons.swap_vert_rounded,
+                  onSelect: _toggleEpisodeOrder,
+                ),
+              ),
               itemBuilder: (context, i) {
-                final e = _siblings[i];
+                final e = episodes[i];
+                final current = e.id == item.id;
                 return Padding(
                   padding: const EdgeInsets.only(top: 12),
                   child: LandscapeCard(
                     item: e,
                     title: '${e.indexNumber ?? ''}. ${e.name}',
-                    subtitle: e.id == item.id ? l10n.nowShowing : formatRuntime(l10n, e.runtime),
+                    subtitle: current ? l10n.nowShowing : formatRuntime(l10n, e.runtime),
+                    focusNode: current ? _episodeNode : null,
                     onSelect: () {
-                      if (e.id != item.id) Navigator.of(context).pushReplacement(detailsRoute(e));
+                      if (!current) Navigator.of(context).pushReplacement(detailsRoute(e));
                     },
                   ),
                 );
