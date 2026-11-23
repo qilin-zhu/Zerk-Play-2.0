@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.16'
+  APP_VERSION: '2.10.17'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -319,4 +319,10 @@ jobs:
 
             **飞牛影视支持从头播放**
             详情页的「从头播放」会忽略服务端记录的进度，从 0 秒开始。
+
+            **飞牛影视的演员头像**
+            上一版重写飞牛详情页时，头像请求漏掉了登录凭证，`sys/img` 直接拒绝，所以电影详情页的演员头像变成了首字母方块。凭证补回来了。剧集的演员本来挂在剧名上、单集查不到，现在会顺着单集 → 剧集往下找，剧集详情页也有演职人员行了。
+
+            **排序后焦点回到当前这一集**
+            剧集详情页按排序按钮，列表会反转并把当前这一集重新对齐到行首，焦点也回到这一集的海报上，不再停在排序按钮上。Emby、Jellyfin、飞牛影视三个服务都是这样。
 

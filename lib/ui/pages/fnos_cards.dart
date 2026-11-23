@@ -252,13 +252,18 @@ class FnOsLandscapeCard extends StatelessWidget {
 /// Circular head shot for the cast row, matching `CastRow`'s geometry (150 wide,
 /// 140 circle, name + role) that the Emby details page uses.
 class FnOsPersonCard extends StatelessWidget {
-  const FnOsPersonCard({super.key, required this.name, this.role, this.photo});
+  const FnOsPersonCard({super.key, required this.name, this.role, this.photo, this.headers});
 
   final String name;
   final String? role;
 
   /// Absolute image URI for the head shot, already resolved for the fnOS host.
   final Uri? photo;
+
+  /// Session headers for that URI. trimemedia serves every picture through
+  /// `sys/img`, which answers 401 to an anonymous request - without these the
+  /// head shot never loads and the card silently falls back to initials.
+  final Map<String, String>? headers;
 
   @override
   Widget build(BuildContext context) {
@@ -282,6 +287,7 @@ class FnOsPersonCard extends StatelessWidget {
               clipBehavior: Clip.antiAlias,
               child: NetImage(
                 url: photo,
+                headers: headers,
                 width: 140,
                 fallback: Center(child: Text(_initials(name), style: Zt.headline.copyWith(color: Zc.textFaint))),
               ),

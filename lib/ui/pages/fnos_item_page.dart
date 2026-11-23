@@ -148,18 +148,44 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
 
   bool get _isEpisode => (_detail?['type']?.toString() ?? widget.seed?.type ?? '').toLowerCase() == 'episode';
 
+  /// Cast of the item.
+  ///
+  /// trimemedia files the people with the title, not with the episode: asking
+  /// `person/list` for an episode guid answers with an empty list (or with the
+  /// names but no head shots), which is why an episode page used to have no
+  /// cast row at all. The season and the show are asked in turn and the first
+  /// answer that actually carries pictures wins.
   Future<void> _loadPersons() async {
     final client = _client;
     if (client == null) return;
+    final detail = _detail ?? const <String, Object?>{};
+    final seen = <String>{};
+    final candidates = [
+      widget.guid,
+      _s(detail, 'ancestor_guid'),
+      _s(detail, 'parent_guid'),
+      widget.seed?.parentGuid,
+    ].whereType<String>().where((g) => g.isNotEmpty && seen.add(g)).toList();
+    var chosen = const <Map<String, Object?>>[];
+    for (final guid in candidates) {
+      final list = await _personsOf(client, guid);
+      if (list.isEmpty) continue;
+      final withPhotos = list.any((p) => _s(p, 'profile_path') != null);
+      if (chosen.isEmpty || withPhotos) chosen = list;
+      if (withPhotos) break;
+    }
+    if (!mounted || chosen.isEmpty) return;
+    setState(() => _persons = chosen);
+  }
+
+  Future<List<Map<String, Object?>>> _personsOf(FnosClient client, String guid) async {
     try {
-      final raw = await client.personList(widget.guid);
+      final raw = await client.personList(guid);
       final list = raw is Map ? raw['list'] as List? ?? const [] : raw is List ? raw : const [];
-      if (!mounted) return;
-      setState(() {
-        _persons = [for (final e in list) if (e is Map) Map<String, Object?>.from(e)];
-      });
+      return [for (final e in _maps(list)) Map<String, Object?>.from(e)];
     } catch (e) {
-      debugPrint('[fnos] persons: $e');
+      debugPrint('[fnos] persons $guid: $e');
+      return const [];
     }
   }
 
@@ -216,6 +242,10 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     final next = !s.settings.episodesDescending;
     debugPrint('[fnos] episode order -> ${next ? 'descending' : 'ascending'}');
     await s.updateSettings(s.settings.copyWith(episodesDescending: next));
+    if (!mounted) return;
+    // Sorting is a request about the row, not about the button: once the cards
+    // have moved, the focus goes back to the episode the viewer was on.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrentEpisode());
   }
 
   /// Puts focus on the card of the episode this page was opened on; the whole
@@ -451,6 +481,11 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
             const SizedBox(height: 60),
             if (episodes.length > 1) ...[
               MediaRow(
+                // Flipping the order moves every card to the opposite end of
+                // the row. Rebuilding the row re-anchors it on the current
+                // episode through initialIndex, the same way opening the page
+                // does, instead of leaving the viewer staring at episode one.
+                key: ValueKey('fnos-episodes-${s.settings.episodesDescending}'),
                 left: pageLeft,
                 title: _seasonTitle(l10n),
                 height: Zs.landscapeWidth * 9 / 16 + 90,
@@ -592,15 +627,17 @@ class CastPeopleRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final directors = [
-      for (final p in persons)
-        if ((p['job']?.toString() ?? '') == 'Director') p,
-    ];
-    final actors = [
-      for (final p in persons)
-        if ((p['job']?.toString() ?? 'Actor') == 'Actor') p,
-    ];
-    final shown = [...directors.take(1), ...actors.take(24)];
+    // trimemedia writes the job in whatever language the metadata came in
+    // ("Actor", "actor", "演员"), so nothing is dropped for having an
+    // unexpected label: the director is pulled to the front - like on the Emby
+    // page - and everyone else follows in server order.
+    final directors = <Map<String, Object?>>[];
+    final rest = <Map<String, Object?>>[];
+    for (final p in persons) {
+      final job = (p['job']?.toString() ?? '').toLowerCase();
+      (job == 'director' ? directors : rest).add(p);
+    }
+    final shown = [...directors.take(1), ...rest].take(25).toList();
     if (shown.isEmpty) return const SizedBox.shrink();
     return MediaRow(
       left: pageLeft,
@@ -610,7 +647,12 @@ class CastPeopleRow extends StatelessWidget {
       itemBuilder: (context, i) {
         final p = shown[i];
         final job = _s(p, 'job') ?? '';
-        final role = job == 'Actor' ? _s(p, 'role') : job;
+        final lower = job.toLowerCase();
+        final role = switch (lower) {
+          '' || 'actor' || 'actress' => _s(p, 'role'),
+          'director' => context.l10n.director,
+          _ => job,
+        };
         final profile = _s(p, 'profile_path');
         final name = _s(p, 'name') ?? _s(p, 'original_name') ?? '';
         return FnOsPersonCard(
@@ -619,6 +661,7 @@ class CastPeopleRow extends StatelessWidget {
           photo: profile == null || client == null
               ? null
               : Uri.parse(client!.imageUrl(profile, width: 280)),
+          headers: client?.imageHeaders,
         );
       },
     );

@@ -206,16 +206,23 @@ class _DetailsPageState extends State<DetailsPage> {
     final next = !s.settings.episodesDescending;
     debugPrint('[details] episode order -> ${next ? 'descending' : 'ascending'}');
     await s.updateSettings(s.settings.copyWith(episodesDescending: next));
+    if (!mounted) return;
+    // The row was rebuilt on the opposite end of the list; the viewer asked
+    // about the episodes, so the focus goes back to the one being shown.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrentEpisode(force: true));
   }
 
   /// Moves focus from the play button to the poster of the episode this page
   /// was opened on, so a 200-episode season doesn't start at episode one.
-  void _focusCurrentEpisode() {
+  ///
+  /// [force] is for the order toggle: there the viewer explicitly asked for the
+  /// row, so the "someone already moved on" guard below must not apply.
+  void _focusCurrentEpisode({bool force = false}) {
     if (!mounted) return;
     final target = _episodeNode.context;
     if (target == null) return;
     // If focus already moved somewhere else the viewer is ahead of us.
-    if (_playNode.context != null && !_playNode.hasPrimaryFocus) return;
+    if (!force && _playNode.context != null && !_playNode.hasPrimaryFocus) return;
     _episodeNode.requestFocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && target.mounted) revealFocused(target);
@@ -462,6 +469,10 @@ class _DetailsPageState extends State<DetailsPage> {
           const SizedBox(height: 60),
           if (episodes.length > 1) ...[
             MediaRow(
+              // Flipping the order moves every card to the opposite end of the
+              // row. Rebuilding the row re-anchors it on the current episode
+              // through initialIndex, exactly like opening the page does.
+              key: ValueKey('episodes-${s.settings.episodesDescending}'),
               left: pageLeft,
               title: item.seasonName ?? l10n.episodes,
               height: Zs.landscapeWidth * 9 / 16 + 90,
