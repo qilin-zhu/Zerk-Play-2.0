@@ -293,7 +293,7 @@ class LandscapeCard extends StatelessWidget {
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: onPlay ?? onSelect,
-                      child: _PlayCircle(),
+                      child: PlayCircle(),
                     ),
                   ),
                 if (item.progress != null) Positioned(left: 0, right: 0, bottom: 0, child: ProgressStrip(item.progress!, height: 6))
@@ -312,12 +312,14 @@ class LandscapeCard extends StatelessWidget {
   }
 }
 
-class _PlayCircle extends StatefulWidget {
+class PlayCircle extends StatefulWidget {
+  const PlayCircle({super.key});
+
   @override
-  State<_PlayCircle> createState() => _PlayCircleState();
+  State<PlayCircle> createState() => _PlayCircleState();
 }
 
-class _PlayCircleState extends State<_PlayCircle> {
+class _PlayCircleState extends State<PlayCircle> {
   bool _hover = false;
 
   @override

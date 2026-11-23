@@ -113,34 +113,55 @@ class _MediaRowState extends State<MediaRow> {
 /// Small focusable chip for a row's title line - the episode sort toggle sits
 /// here rather than among the action buttons, since it acts on the row below
 /// it and not on the title itself.
+///
+/// Only the icon is drawn while the chip is idle: a permanent pill with text
+/// next to every row title reads as content, and the sort direction is
+/// something the viewer looks up once, on the way into the row. Focusing (or
+/// hovering) it expands the label so the current direction is still readable,
+/// exactly like the collapsed action buttons on the details page.
 class RowTitleButton extends StatelessWidget {
-  const RowTitleButton({super.key, required this.label, this.icon, this.onSelect, this.focusNode});
+  const RowTitleButton({super.key, required this.label, this.icon, this.onSelect, this.focusNode, this.iconQuarterTurns = 3});
 
   final String label;
   final IconData? icon;
   final VoidCallback? onSelect;
   final FocusNode? focusNode;
 
+  /// Counter-clockwise quarter turns applied to [icon]. The default rotates a
+  /// vertical glyph (swap_vert) a quarter turn to the left, so the arrows read
+  /// as "order", not as "scroll up/down".
+  final int iconQuarterTurns;
+
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
       focusNode: focusNode,
       onSelect: onSelect,
-      builder: (context, focused) => AnimatedContainer(
-        duration: Zm.fast,
-        curve: Zm.curve,
-        height: 42,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: focused ? Colors.white : Colors.white.withValues(alpha: 0.10),
-          borderRadius: BorderRadius.circular(21),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          if (icon != null) Icon(icon, size: 20, color: focused ? Zc.background : Zc.textMuted),
-          if (icon != null) const SizedBox(width: 8),
-          Text(label, style: Zt.label.copyWith(fontSize: 19, color: focused ? Zc.background : Zc.textMuted)),
-        ]),
-      ),
+      builder: (context, focused) {
+        final fg = focused ? Zc.background : Zc.textMuted;
+        return AnimatedContainer(
+          duration: Zm.fast,
+          curve: Zm.curve,
+          height: 42,
+          padding: EdgeInsets.only(left: 11, right: focused ? 20 : 11),
+          decoration: BoxDecoration(
+            color: focused ? Colors.white : Colors.white.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(21),
+          ),
+          child: AnimatedSize(
+            duration: Zm.fast,
+            curve: Zm.curve,
+            alignment: Alignment.centerLeft,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (icon != null)
+                RotatedBox(quarterTurns: iconQuarterTurns, child: Icon(icon, size: 20, color: fg)),
+              if (focused && icon != null) const SizedBox(width: 8),
+              if (focused)
+                Text(label, style: Zt.label.copyWith(fontSize: 19, color: fg)),
+            ]),
+          ),
+        );
+      },
     );
   }
 }

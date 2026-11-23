@@ -3,21 +3,34 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/app_services.dart';
+import '../../core/emby/models/media_source.dart';
 import '../../core/fnos/fnos_client.dart';
 import '../../core/fnos/fnos_item.dart';
 import '../../l10n/l10n.dart';
 import '../../playback/fnos_playback.dart' show playFnOs;
+import '../../playback/versions.dart';
 import '../core/navigation.dart';
 import '../focus/focus_zone.dart';
-import '../focus/tv_focusable.dart';
 import '../theme/tokens.dart';
+import '../widgets/backdrop.dart';
 import '../widgets/common.dart';
+import '../widgets/media_badges.dart';
 import '../widgets/media_row.dart';
-import '../widgets/net_image.dart';
+import '../widgets/rows_scroll_view.dart';
+import 'details_parts.dart' show OverviewText, SynopsisButton, endsAt, overviewIsLong, pageLeft;
+import 'fnos_cards.dart';
+import 'hero.dart' show formatRuntime;
 
-/// Detail page for a trimemedia item: raw `item/{guid}` plus cast, stream
-/// info, and season/episode lists. Episodes play directly through the fnOS
-/// playback session; movies and videos get a play button.
+/// Detail page for a trimemedia item: `item/{guid}` plus cast, stream info and
+/// the season/episode lists.
+///
+/// The layout is deliberately the same one [DetailsPage] uses for Emby and
+/// Jellyfin — full-bleed drifting backdrop, title block at [pageLeft] starting a
+/// fifth of the way down, overview beside it, one row of action buttons, the
+/// episode row as 16:9 cards, then cast and a single tech line. Only the data
+/// source differs: trimemedia carries no logos, media sources or user data
+/// flags, so the stream list is folded into a [MediaSourceInfo] to feed the
+/// same badges, and the resume position comes from the item's `ts`/`duration`.
 class FnOsItemPage extends StatefulWidget {
   const FnOsItemPage({super.key, required this.guid, this.seed});
 
@@ -37,10 +50,13 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
   String? _seasonGuid;
   String? _error;
   bool _busy = false;
+
+  final _scroll = RevealController(mode: RevealMode.minimal, margin: 140);
+  final _playNode = FocusNode(debugLabel: 'fnos-play');
   final _episodeNode = FocusNode(debugLabel: 'fnos-episode-current');
   bool _episodeFocusPending = true;
 
-  FnosClient get _client => AppServicesScope.read(context).janus.fnos!;
+  FnosClient? get _client => AppServicesScope.read(context).janus.fnos;
 
   @override
   void initState() {
@@ -50,6 +66,8 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
 
   @override
   void dispose() {
+    _scroll.dispose();
+    _playNode.dispose();
     _episodeNode.dispose();
     super.dispose();
   }
@@ -61,6 +79,11 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
 
   String _guid(Map m) => m['guid']?.toString() ?? '';
 
+  int _int(Map m, String key) => (m[key] as num?)?.toInt() ?? 0;
+
+  static List<Map> _maps(Object? raw) =>
+      raw is List ? [for (final e in raw) if (e is Map) e] : const [];
+
   Future<void> _reload() async {
     if (_busy) return;
     setState(() {
@@ -69,14 +92,14 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     });
     try {
       final client = _client;
+      if (client == null) throw StateError('no fnOS session');
       final detail = await client.itemDetail(widget.guid);
       final map = detail is Map ? Map<String, Object?>.from(detail) : <String, Object?>{};
       final type = (map['type']?.toString() ?? widget.seed?.type ?? '').toLowerCase();
       final seasons = <Map<String, Object?>>[];
       if (type == 'tv') {
         final raw = await client.seasonList(widget.guid);
-        final list = raw is List ? raw : raw is Map ? raw['list'] as List? ?? const [] : const [];
-        seasons.addAll([for (final e in list) if (e is Map) Map<String, Object?>.from(e)]);
+        seasons.addAll([for (final e in _maps(raw)) Map<String, Object?>.from(e)]);
       }
       if (!mounted) return;
       setState(() {
@@ -84,6 +107,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
         _seasons = seasons;
         _busy = false;
       });
+      _focusPlay();
 
       // Cast and stream details load in the background; failures stay silent.
       unawaited(_loadPersons());
@@ -112,9 +136,23 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     }
   }
 
+  /// Same entry point as an Emby detail page: the play button takes the focus
+  /// unless this page was opened on one episode, in which case the poster of
+  /// that episode does (see [_focusCurrentEpisode]).
+  void _focusPlay() {
+    if (_isEpisode) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _playNode.canRequestFocus) _playNode.requestFocus();
+    });
+  }
+
+  bool get _isEpisode => (_detail?['type']?.toString() ?? widget.seed?.type ?? '').toLowerCase() == 'episode';
+
   Future<void> _loadPersons() async {
+    final client = _client;
+    if (client == null) return;
     try {
-      final raw = await _client.personList(widget.guid);
+      final raw = await client.personList(widget.guid);
       final list = raw is Map ? raw['list'] as List? ?? const [] : raw is List ? raw : const [];
       if (!mounted) return;
       setState(() {
@@ -126,8 +164,10 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
   }
 
   Future<void> _loadStreams() async {
+    final client = _client;
+    if (client == null) return;
     try {
-      final raw = await _client.streamList(widget.guid);
+      final raw = await client.streamList(widget.guid);
       final map = raw is Map ? Map<String, Object?>.from(raw) : null;
       if (map == null || !mounted) return;
       setState(() => _streams = map);
@@ -137,13 +177,15 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
   }
 
   Future<void> _loadEpisodes(String guid) async {
+    final client = _client;
+    if (client == null) return;
     setState(() => _seasonGuid = guid);
     try {
-      final raw = await _client.episodeList(guid);
+      final raw = await client.episodeList(guid);
       final list = raw is List ? raw : raw is Map ? raw['list'] as List? ?? const [] : const [];
       if (!mounted) return;
       setState(() {
-        _episodes = [for (final e in list) if (e is Map) Map<String, Object?>.from(e)];
+        _episodes = [for (final e in _maps(list)) Map<String, Object?>.from(e)];
       });
       if (_episodeFocusPending) {
         _episodeFocusPending = false;
@@ -176,13 +218,13 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
     await s.updateSettings(s.settings.copyWith(episodesDescending: next));
   }
 
-  /// Puts focus on the row of the episode this page was opened on; the whole
-  /// season can be 200 rows long, so starting at the first one means scrolling
-  /// past all of them.
+  /// Puts focus on the card of the episode this page was opened on; the whole
+  /// season can be 200 entries long, so starting at the first one means
+  /// scrolling past all of them.
   void _focusCurrentEpisode() {
     if (!mounted) return;
     final target = _episodeNode.context;
-    if (target == null) return;
+    if (target == null || !_episodeNode.canRequestFocus) return;
     _episodeNode.requestFocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && target.mounted) revealFocused(target);
@@ -191,360 +233,413 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
 
   FnOsItem _itemOf(Map m) => FnOsItem.from(m);
 
+  /// Resume position in seconds, from the item itself (`ts`) with the list
+  /// payload as fallback when the page was opened from a card.
+  int get _resumeSeconds {
+    final ts = _detail == null ? 0 : _int(_detail!, 'ts');
+    final start = ts > 0 ? ts : (widget.seed?.ts ?? 0);
+    if (start <= 0) return 0;
+    final d = _durationSeconds;
+    // Emby hides the resume button once the file is essentially over.
+    return d > 0 && start >= d - 10 ? 0 : start;
+  }
+
+  int get _durationSeconds {
+    final fromDetail = _detail == null ? 0 : _int(_detail!, 'duration');
+    if (fromDetail > 0) return fromDetail;
+    return widget.seed?.duration ?? 0;
+  }
+
+  /// trimemedia has no `MediaSources`; the stream list describes the same file
+  /// in its own words. Folding it into [MediaSourceInfo] lets the details page
+  /// use the very same badges and summary line as the Emby one.
+  MediaSourceInfo? get _sourceInfo {
+    final streams = _streams;
+    if (streams == null) return null;
+    final list = <MediaStream>[];
+    var index = 0;
+    MediaStream convert(Map raw, MediaStreamType type) => MediaStream(
+          index: index++,
+          type: type,
+          codec: _s(raw, 'codec_name'),
+          profile: _s(raw, 'profile'),
+          language: _s(raw, 'language'),
+          title: _s(raw, 'title') ?? _s(raw, 'display_title'),
+          displayTitle: _s(raw, 'display_title'),
+          channels: (raw['channels'] as num?)?.toInt(),
+          channelLayout: _s(raw, 'channel_layout'),
+          bitRate: (raw['bit_rate'] as num?)?.toInt(),
+          width: (raw['width'] as num?)?.toInt(),
+          height: (raw['height'] as num?)?.toInt(),
+          videoRange: _rangeHint(raw),
+          extendedVideoType: _rangeHint(raw),
+        );
+    for (final v in _maps(streams['video_streams'])) {
+      list.add(convert(v, MediaStreamType.video));
+    }
+    for (final a in _maps(streams['audio_streams'])) {
+      list.add(convert(a, MediaStreamType.audio));
+    }
+    for (final s in _maps(streams['subtitle_streams'])) {
+      list.add(convert(s, MediaStreamType.subtitle));
+    }
+    if (list.isEmpty) return null;
+    final files = _maps(streams['file_stream']);
+    final file = files.isEmpty ? const <Object?, Object?>{} : files.first;
+    final name = _s(file, 'file_name') ?? _s(file, 'path') ?? _s(_detail ?? const {}, 'file_name');
+    return MediaSourceInfo(
+      id: '',
+      streams: list,
+      chapters: const [],
+      container: _containerOf(name),
+      size: (file['size'] as num?)?.toInt(),
+      path: name,
+    );
+  }
+
+  /// HDR/Dolby Vision hint. trimemedia names the transfer differently across
+  /// versions, so every plausible key is tried and only the recognised values
+  /// are used — a plain 8-bit file simply yields null.
+  static String? _rangeHint(Map raw) {
+    for (final key in const ['color_transfer_type', 'color_range_type', 'hdr_type', 'dynamic_range', 'dolby_vision']) {
+      final value = raw[key]?.toString().toLowerCase();
+      if (value == null || value.isEmpty || value == '0' || value == 'false') continue;
+      if (value.contains('dovi') || value.contains('dolby')) return 'DolbyVision';
+      if (value.contains('hdr10+') || value.contains('hdr10plus')) return 'Hdr10Plus';
+      if (value.contains('hlg')) return 'HyperLogGamma';
+      if (value.contains('hdr')) return 'Hdr10';
+    }
+    return null;
+  }
+
+  static String? _containerOf(String? name) {
+    if (name == null) return null;
+    final dot = name.lastIndexOf('.');
+    if (dot < 0 || dot == name.length - 1) return null;
+    return name.substring(dot + 1).toUpperCase();
+  }
+
+  Future<void> _play({bool fromStart = false}) async {
+    final detail = _detail;
+    if (detail == null) return;
+    await playFnOs(context, _itemOf(detail), fromStart: fromStart);
+  }
+
+  void _openEpisode(Map<String, Object?> episode) {
+    final guid = _guid(episode);
+    if (guid.isEmpty || guid == widget.guid) return;
+    Navigator.of(context).pushReplacement(
+      tvRoute(FnOsItemPage(guid: guid, seed: _itemOf(episode)), name: 'fnos:$guid'),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    final descending = AppServicesScope.of(context).settings.episodesDescending;
-    final detail = _detail;
-    final type = (detail == null ? widget.seed?.type : detail['type']?.toString())?.toLowerCase() ?? '';
-    final playable = type == 'movie' || type == 'video' || type == 'episode';
-    return Scaffold(
-      body: _error != null
-          ? Padding(
-              padding: EdgeInsets.only(left: contentLeft, top: 100, right: 120),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(l10n.couldNotLoadDetails(_error!), style: Zt.body),
-                const SizedBox(height: 24),
-                TvButton(label: l10n.tryAgain, icon: Icons.refresh_rounded, onSelect: _reload),
-              ]),
-            )
-          : ListView(
-              padding: EdgeInsets.only(bottom: 140),
-              children: [
-                _header(context, detail, playable),
-                const SizedBox(height: 30),
-                if (detail == null)
-                  Padding(
-                    padding: EdgeInsets.only(left: contentLeft, top: 30, right: 120),
-                    child: const LinearProgressIndicator(minHeight: 3),
-                  )
-                else ...[
-                  if (detail['overview']?.toString().isNotEmpty == true)
-                    Padding(
-                      padding: EdgeInsets.only(left: contentLeft, top: 6, right: 140),
-                      child: Text(detail['overview']!.toString(), style: Zt.body.copyWith(height: 1.5)),
-                    ),
-                  if (_streams != null) ...[
-                    const SizedBox(height: 30),
-                    _mediaInfo(context),
-                  ],
-                  if (_persons.isNotEmpty) ...[
-                    const SizedBox(height: 30),
-                    _cast(context),
-                  ],
-                  if (_seasons.length > 1) ...[
-                    const SizedBox(height: 36),
-                    Padding(
-                      padding: EdgeInsets.only(left: contentLeft, right: 120),
-                      child: FocusZone(
-                        debugLabel: 'fnos-seasons',
-                        child: Wrap(spacing: 16, runSpacing: 16, children: [
-                          for (final s in _seasons)
-                            TvButton(
-                              label: l10n.seasonNumber((s['season_number'] as num?)?.toInt() ?? 0),
-                              primary: _seasonGuid == _guid(s),
-                              icon: Icons.movie_filter_outlined,
-                              onSelect: () => _loadEpisodes(_guid(s)),
-                            ),
-                        ]),
-                      ),
-                    ),
-                  ],
-                  if (_episodes.isNotEmpty) ...[
-                    const SizedBox(height: 36),
-                    Padding(
-                      padding: EdgeInsets.only(left: contentLeft, right: 120, bottom: 14),
-                      child: Row(children: [
-                        Text(l10n.episodes, style: Zt.title),
-                        const SizedBox(width: 18),
-                        FocusZone(
-                          debugLabel: 'fnos-episode-order',
-                          child: RowTitleButton(
-                            label: descending ? l10n.episodesDescending : l10n.episodesAscending,
-                            icon: Icons.swap_vert_rounded,
-                            onSelect: () => unawaited(_toggleEpisodeOrder()),
-                          ),
-                        ),
-                      ]),
-                    ),
-                    FocusZone(
-                      debugLabel: 'fnos-episodes',
-                      child: Padding(
-                        padding: EdgeInsets.only(left: contentLeft, right: 120),
-                        child: Column(children: [
-                          for (final e in _orderedEpisodes(descending)) _episodeRow(context, e),
-                        ]),
-                      ),
-                    ),
-                  ],
-                  if ((type == 'tv' || type == 'episode') && _seasons.isEmpty && _episodes.isEmpty && !_busy)
-                    Padding(
-                      padding: EdgeInsets.only(left: contentLeft, top: 8, right: 120),
-                      child: Text(l10n.fnosEpisodesEmpty, style: Zt.body.copyWith(color: Zc.textFaint)),
-                    ),
-                ],
-              ],
-            ),
-    );
-  }
-
-  String _meta(L10n l10n, Map<String, Object?> map, FnOsItem? seed) {
-    final parts = <String>[];
-    final date = (map['release_date'] ?? seed?.releaseDate)?.toString();
-    if (date != null && date.length >= 4) parts.add(date.substring(0, 4));
-    final vote = (map['vote_average'] ?? seed?.voteAverage)?.toString();
-    if (vote != null && vote.isNotEmpty && vote != '0') parts.add('★ $vote');
-    final seasons = (map['number_of_seasons'] as num?)?.toInt() ?? seed?.numberOfSeasons ?? 0;
-    final episodes = (map['number_of_episodes'] as num?)?.toInt() ?? seed?.numberOfEpisodes ?? 0;
-    if (seasons > 1) parts.add(l10n.seasonNumber(seasons));
-    if (episodes > 0 && seasons > 0) parts.add(l10n.episodeCount(episodes));
-    final duration = (map['duration'] as num?)?.toInt() ?? seed?.duration ?? 0;
-    if (duration > 0 && seasons == 0) {
-      final mins = duration ~/ 60;
-      parts.add(mins >= 60 ? l10n.runtimeHoursMinutes(mins ~/ 60, mins % 60) : l10n.runtimeMinutes(mins));
-    }
-    return parts.join('  ·  ');
-  }
-
-  Widget _header(BuildContext context, Map<String, Object?>? detail, bool playable) {
+    final s = AppServicesScope.of(context);
     final client = _client;
+    final size = MediaQuery.sizeOf(context);
+    final detail = _detail;
     final seed = widget.seed;
-    final title = detail == null
-        ? (seed?.displayTitle ?? '')
-        : ((detail['type']?.toString().toLowerCase() == 'episode' && (detail['tv_title']?.toString().isNotEmpty ?? false))
-            ? detail['tv_title']!.toString()
-            : detail['title']?.toString() ?? seed?.displayTitle ?? '');
-    final backdrop = _s(detail ?? const {}, 'backdrops');
-    final poster = _s(detail ?? const {}, 'posters') ?? seed?.posterPath;
-    final watched = detail != null
-        ? (detail['watched']?.toString() == '1' || detail['is_watched']?.toString() == '1')
-        : (seed?.watched ?? false);
-    final l10n = context.l10n;
-    return Stack(
-      alignment: Alignment.bottomLeft,
-      children: [
-        SizedBox(
-          width: double.infinity,
-          height: 420,
-          child: Stack(fit: StackFit.expand, children: [
-            NetImage(
-              url: backdrop != null
-                  ? Uri.parse(client.imageUrl(backdrop, width: 1200))
-                  : poster != null
-                      ? Uri.parse(client.imageUrl(poster, width: 1200))
-                      : null,
-              headers: client.imageHeaders,
-              fallback: const SizedBox.shrink(),
-            ),
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [
-                  Color(0x66000000),
-                  Color(0x00000000),
-                  Zc.background,
-                ], stops: [0, 0.55, 1]),
-              ),
-            ),
-          ]),
-        ),
+    final heading = detail == null ? seed?.displayTitle ?? '' : _heading(detail);
+    final backdropPath = _s(detail ?? const {}, 'backdrops') ?? seed?.posterPath;
+    final backdrop = backdropPath == null || client == null
+        ? null
+        : Uri.parse(client.imageUrl(backdropPath, width: 1920));
+
+    if (_error != null && detail == null) {
+      return Stack(children: [
+        Positioned.fill(child: Backdrop(url: backdrop, headers: client?.imageHeaders)),
         Padding(
-          padding: EdgeInsets.only(left: contentLeft, right: 120, bottom: 24),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            if (poster != null)
-              SizedBox(
-                width: 150,
-                height: 225,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: NetImage(
-                    url: Uri.parse(client.imageUrl(poster, width: 300)),
-                    headers: client.imageHeaders,
-                    fallback: const SizedBox.shrink(),
-                  ),
-                ),
+          padding: EdgeInsets.only(left: pageLeft, top: size.height * 0.2),
+          child: _errorView(l10n),
+        ),
+      ]);
+    }
+
+    final source = _sourceInfo;
+    final version = source == null ? null : VersionInfo(source);
+    final resume = _resumeSeconds > 0 ? Duration(seconds: _resumeSeconds) : null;
+    final duration = _durationSeconds > 0 ? Duration(seconds: _durationSeconds) : null;
+    final type = (detail?['type']?.toString() ?? seed?.type ?? '').toLowerCase();
+    final playable = type == 'movie' || type == 'video' || type == 'episode';
+    final watched = detail == null
+        ? (seed?.watched ?? false)
+        : (detail['watched']?.toString() == '1' || detail['is_watched']?.toString() == '1');
+    final overview = _s(detail ?? const {}, 'overview') ?? _s(detail ?? const {}, 'overviews');
+    final episodes = _orderedEpisodes(s.settings.episodesDescending);
+    final currentIndex = episodes.indexWhere((e) => _guid(e) == widget.guid);
+    final parentGuid = detail == null ? null : _s(detail, 'parent_guid');
+
+    return Stack(children: [
+      Positioned.fill(child: Backdrop(url: backdrop, headers: client?.imageHeaders, drift: true)),
+      if (detail == null)
+        const _Loading()
+      else
+        PageScrollView(
+          controller: _scroll,
+          padding: EdgeInsets.only(top: size.height * 0.2, bottom: 120),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: pageLeft, right: 700),
+              child: _titleBlock(l10n, detail, heading, version, duration, resume, watched),
+            ),
+            const SizedBox(height: 22),
+            if (overview != null)
+              Padding(
+                padding: const EdgeInsets.only(left: pageLeft, right: 760),
+                child: OverviewText(title: heading, text: overview),
               ),
-            if (poster != null) const SizedBox(width: 26),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Flexible(child: Text(title, style: Zt.display.copyWith(fontSize: 44), maxLines: 2, overflow: TextOverflow.ellipsis)),
-                  if (watched) ...[
-                    const SizedBox(width: 14),
-                    const Icon(Icons.check_circle_rounded, color: Zc.success, size: 34),
-                  ],
-                ]),
-                if (detail != null) ...[
-                  const SizedBox(height: 10),
-                  Text(_meta(l10n, detail, seed), style: Zt.caption.copyWith(fontSize: 22, color: Zc.textMuted)),
-                ],
-                if (playable && detail != null) ...[
-                  const SizedBox(height: 20),
-                  FocusZone(
-                    debugLabel: 'fnos-detail-actions',
-                    child: TvButton(
-                      label: l10n.play,
+            const SizedBox(height: 34),
+            Padding(
+              padding: const EdgeInsets.only(left: pageLeft, right: 120),
+              child: FocusZone(
+                debugLabel: 'actions',
+                revealsTop: true,
+                child: Wrap(spacing: 18, runSpacing: 18, children: [
+                  if (playable)
+                    TvButton(
+                      focusNode: _playNode,
+                      label: resume != null
+                          ? l10n.resumeTimeLeft(formatRuntime(l10n, (duration ?? resume) - resume) ?? '')
+                          : l10n.play,
                       icon: Icons.play_arrow_rounded,
                       primary: true,
-                      onSelect: () => unawaited(playFnOs(context, _itemOf(detail))),
+                      onSelect: _play,
                     ),
-                  ),
-                ],
-              ]),
+                  if (playable && resume != null)
+                    TvButton(
+                      label: l10n.fromBeginning,
+                      icon: Icons.replay_rounded,
+                      onSelect: () => _play(fromStart: true),
+                    ),
+                  if (overviewIsLong(overview)) SynopsisButton(title: heading, text: overview!),
+                  if (_isEpisode && parentGuid != null && parentGuid.isNotEmpty)
+                    TvButton(
+                      label: l10n.goToSeries,
+                      icon: Icons.tv_rounded,
+                      collapsed: true,
+                      onSelect: () => Navigator.of(context).pushReplacement(
+                        tvRoute(FnOsItemPage(guid: parentGuid), name: 'fnos:$parentGuid'),
+                      ),
+                    ),
+                ]),
+              ),
             ),
-          ]),
+            if (_seasons.length > 1) ...[
+              const SizedBox(height: 46),
+              Padding(
+                padding: const EdgeInsets.only(left: pageLeft, bottom: 18),
+                child: Text(l10n.seasons, style: Zt.rowTitle),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: pageLeft, right: 120),
+                child: FocusZone(
+                  debugLabel: 'fnos-seasons',
+                  child: Wrap(spacing: 16, runSpacing: 16, children: [
+                    for (final season in _seasons)
+                      TvButton(
+                        label: l10n.seasonNumber((season['season_number'] as num?)?.toInt() ?? 0),
+                        icon: Icons.movie_filter_outlined,
+                        primary: _seasonGuid == _guid(season),
+                        onSelect: () => unawaited(_loadEpisodes(_guid(season))),
+                      ),
+                  ]),
+                ),
+              ),
+            ],
+            const SizedBox(height: 60),
+            if (episodes.length > 1) ...[
+              MediaRow(
+                left: pageLeft,
+                title: _seasonTitle(l10n),
+                height: Zs.landscapeWidth * 9 / 16 + 90,
+                itemCount: episodes.length,
+                itemExtent: Zs.landscapeWidth + Zs.cardGap,
+                initialIndex: currentIndex < 0 ? null : currentIndex,
+                trailingTitle: FocusZone(
+                  debugLabel: 'fnos-episode-order',
+                  child: RowTitleButton(
+                    label: s.settings.episodesDescending ? l10n.episodesDescending : l10n.episodesAscending,
+                    icon: Icons.swap_vert_rounded,
+                    onSelect: () => unawaited(_toggleEpisodeOrder()),
+                  ),
+                ),
+                itemBuilder: (context, i) {
+                  final e = episodes[i];
+                  final current = _guid(e) == widget.guid;
+                  // On an episode page the focus lands on that episode; a tv
+                  // page has no play button of its own, so it goes to the
+                  // first episode instead of leaving the page unfocused.
+                  final focusNode = current || (!playable && i == 0) ? _episodeNode : null;
+                  final number = (e['episode_number'] as num?)?.toInt() ?? 0;
+                  final title = e['title']?.toString() ?? '';
+                  final length = (e['duration'] as num?)?.toInt() ?? 0;
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: FnOsLandscapeCard(
+                      item: _itemOf(e),
+                      title: '$number. $title',
+                      subtitle: current
+                          ? l10n.nowShowing
+                          : length > 0
+                              ? formatRuntime(l10n, Duration(seconds: length))
+                              : null,
+                      focusNode: focusNode,
+                      onSelect: () => _openEpisode(e),
+                      onPlay: () => unawaited(playFnOs(context, _itemOf(e))),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: Zs.rowGap),
+            ],
+            if (_persons.isNotEmpty) CastPeopleRow(persons: _persons, client: client),
+            if (version != null) _techInfo(version, source!),
+          ],
         ),
+    ]);
+  }
+
+  /// Big title, with the episode line and the meta/badges rows of an Emby
+  /// details page. trimemedia ships no logo art, so the text title is used the
+  /// same way [TitleBlock] falls back to it.
+  Widget _titleBlock(L10n l10n, Map detail, String heading, VersionInfo? version, Duration? duration,
+      Duration? resume, bool watched) {
+    final type = detail['type']?.toString().toLowerCase() ?? '';
+    final isEpisode = type == 'episode';
+    final season = (detail['season_number'] as num?)?.toInt() ?? 0;
+    final episode = (detail['episode_number'] as num?)?.toInt() ?? 0;
+    final own = detail['title']?.toString() ?? '';
+    final code = season > 0 || episode > 0 ? 'S$season E$episode' : null;
+    final year = _s(detail, 'release_date');
+    final vote = double.tryParse(detail['vote_average']?.toString() ?? '');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text(heading, maxLines: 2, overflow: TextOverflow.ellipsis, style: Zt.display),
+      if (isEpisode && own.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        Text([code, own].whereType<String>().join('  ·  '), style: Zt.title),
       ],
-    );
+      const SizedBox(height: 16),
+      MetaLine(
+        [
+          if (year != null && year.length >= 4) year.substring(0, 4),
+          formatRuntime(l10n, duration),
+          endsAt(l10n, duration, position: resume),
+        ],
+        leading: [if (vote != null && vote > 0) RatingPill(vote)],
+        trailing: [if (watched) const Icon(Icons.check_circle_rounded, size: 24, color: Zc.success)],
+      ),
+      if (version != null) ...[
+        const SizedBox(height: 14),
+        MediaBadges(version),
+      ],
+    ]);
   }
 
-  /// Media stream info from stream/list: resolution, codec, audio/subtitles.
-  Widget _mediaInfo(BuildContext context) {
-    final streams = _streams;
-    if (streams == null) return const SizedBox.shrink();
-    final videos = [for (final v in (streams['video_streams'] as List? ?? const [])) if (v is Map) v];
-    final audios = [for (final v in (streams['audio_streams'] as List? ?? const [])) if (v is Map) v];
-    final subs = [for (final v in (streams['subtitle_streams'] as List? ?? const [])) if (v is Map) v];
-    final l10n = context.l10n;
-    final lines = <String>[];
-    if (videos.isNotEmpty) {
-      final v = videos.first;
-      final res = _s(v, 'resolution_type');
-      final codec = _s(v, 'codec_name');
-      final profile = _s(v, 'profile');
-      final w = (v['width'] as num?)?.toInt() ?? 0;
-      final h = (v['height'] as num?)?.toInt() ?? 0;
-      final range = _s(v, 'color_range_type');
-      final parts = [
-        if (res != null) res,
-        if (w > 0 && h > 0) '$w×$h',
-        if (codec != null) codec.toUpperCase(),
-        if (profile != null) profile,
-        if (range != null) range,
-      ];
-      if (parts.isNotEmpty) lines.add('${l10n.infoVideo}: ${parts.join('  ·  ')}');
+  String _heading(Map detail) {
+    final seed = widget.seed;
+    if (detail['type']?.toString().toLowerCase() == 'episode') {
+      final tv = _s(detail, 'tv_title');
+      if (tv != null) return tv;
     }
-    if (audios.isNotEmpty) {
-      final codecs = {
-        for (final a in audios)
-          if (_s(a, 'codec_name') != null) _s(a, 'codec_name')!.toUpperCase(),
-      };
-      if (codecs.isNotEmpty) lines.add('${l10n.audio}: ${codecs.join(' / ')}  (${l10n.episodeCount(audios.length)})');
-    }
-    if (subs.isNotEmpty) lines.add('${l10n.subtitles}: ${l10n.episodeCount(subs.length)}');
-    if (lines.isEmpty) return const SizedBox.shrink();
+    return _s(detail, 'title') ?? seed?.displayTitle ?? '';
+  }
+
+  String _seasonTitle(L10n l10n) => _s(
+        _seasons.firstWhere(
+          (season) => _guid(season) == _seasonGuid,
+          orElse: () => const {},
+        ),
+        'title',
+      ) ??
+      l10n.episodes;
+
+  Widget _techInfo(VersionInfo version, MediaSourceInfo source) {
+    final line = [version.summary, ?version.bitrate, ?source.container].where((e) => e.isNotEmpty).join('   ·   ');
     return Padding(
-      padding: EdgeInsets.only(left: contentLeft, right: 140),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(l10n.playbackInfo, style: Zt.title),
-        const SizedBox(height: 10),
-        for (final line in lines)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Text(line, style: Zt.body.copyWith(fontSize: 20)),
-          ),
-      ]),
+      padding: const EdgeInsets.only(left: pageLeft, top: 50, right: 120),
+      child: Text(line, style: Zt.caption),
     );
   }
 
-  /// Cast and crew row: avatar, name, and the character or job.
-  Widget _cast(BuildContext context) {
-    final client = _client;
-    final persons = _persons;
-    if (persons.isEmpty) return const SizedBox.shrink();
+  Widget _errorView(L10n l10n) => Padding(
+        padding: const EdgeInsets.only(right: 120),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(l10n.couldNotLoadTitle, style: Zt.headline),
+          const SizedBox(height: 12),
+          Text('$_error', style: Zt.body, maxLines: 3),
+          const SizedBox(height: 30),
+          FocusZone(
+            child: TvButton(label: l10n.tryAgain, icon: Icons.refresh_rounded, autofocus: true, onSelect: _reload),
+          ),
+        ]),
+      );
+}
+
+/// Cast row with the geometry of the Emby one: a circle head shot, the name
+/// under it and the character (or job) below that.
+class CastPeopleRow extends StatelessWidget {
+  const CastPeopleRow({super.key, required this.persons, required this.client});
+
+  final List<Map<String, Object?>> persons;
+  final FnosClient? client;
+
+  String? _s(Map m, String key) {
+    final v = m[key]?.toString();
+    return v == null || v.isEmpty || v == '0' ? null : v;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final directors = [
+      for (final p in persons)
+        if ((p['job']?.toString() ?? '') == 'Director') p,
+    ];
+    final actors = [
+      for (final p in persons)
+        if ((p['job']?.toString() ?? 'Actor') == 'Actor') p,
+    ];
+    final shown = [...directors.take(1), ...actors.take(24)];
+    if (shown.isEmpty) return const SizedBox.shrink();
     return MediaRow(
+      left: pageLeft,
       title: context.l10n.castAndCrew,
-      height: 250,
-      itemCount: persons.length,
+      height: 260,
+      itemCount: shown.length,
       itemBuilder: (context, i) {
-        final p = persons[i];
-        final name = _s(p, 'name') ?? _s(p, 'original_name') ?? '';
+        final p = shown[i];
         final job = _s(p, 'job') ?? '';
         final role = job == 'Actor' ? _s(p, 'role') : job;
         final profile = _s(p, 'profile_path');
-        return SizedBox(
-          width: 120,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            SizedBox(
-              width: 110,
-              height: 150,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: NetImage(
-                  url: profile == null ? null : Uri.parse(client.imageUrl(profile, width: 220)),
-                  headers: client.imageHeaders,
-                  fallback: TitleArt(title: name, icon: Icons.person_outline_rounded),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Zt.label.copyWith(fontSize: 19)),
-            if (role != null && role.isNotEmpty)
-              Text(role, maxLines: 1, overflow: TextOverflow.ellipsis, style: Zt.caption.copyWith(fontSize: 17)),
-          ]),
+        final name = _s(p, 'name') ?? _s(p, 'original_name') ?? '';
+        return FnOsPersonCard(
+          name: name,
+          role: role,
+          photo: profile == null || client == null
+              ? null
+              : Uri.parse(client!.imageUrl(profile, width: 280)),
         );
       },
     );
   }
+}
 
-  Widget _episodeRow(BuildContext context, Map<String, Object?> episode) {
-    final client = _client;
-    final l10n = context.l10n;
-    final s = (episode['season_number'] as num?)?.toInt() ?? 0;
-    final e = (episode['episode_number'] as num?)?.toInt() ?? 0;
-    final title = episode['title']?.toString() ?? '';
-    final current = _guid(episode) == widget.guid;
-    final watched = episode['watched']?.toString() == '1' || episode['is_watched']?.toString() == '1';
-    final poster = _s(episode, 'poster');
-    return TvFocusable(
-      focusNode: current ? _episodeNode : null,
-      onSelect: () => unawaited(playFnOs(context, _itemOf(episode))),
-      builder: (context, focused) => Container(
-        margin: const EdgeInsets.only(bottom: 14),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: focused ? Zc.surfaceTop : Zc.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: focused ? Colors.white : Zc.outline, width: focused ? 2.5 : 1.2),
-        ),
-        child: Row(children: [
-          SizedBox(
-            width: 150,
-            height: 84,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: NetImage(
-                url: poster == null ? null : Uri.parse(client.imageUrl(poster, width: 300)),
-                headers: client.imageHeaders,
-                fallback: const SizedBox.shrink(),
-              ),
-            ),
-          ),
-          const SizedBox(width: 18),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(
-                s > 0 || e > 0 ? l10n.playEpisode('S$s E$e') : title,
-                style: Zt.label.copyWith(fontSize: 20, color: Zc.textFaint),
-              ),
-              if (title.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(title, style: Zt.body.copyWith(fontSize: 24), maxLines: 1, overflow: TextOverflow.ellipsis),
-                ),
-            ]),
-          ),
-          if (current)
-            Padding(
-              padding: const EdgeInsets.only(left: 10),
-              child: Pill(l10n.nowShowing),
-            )
-          else if (watched)
-            const Padding(
-              padding: EdgeInsets.only(left: 10),
-              child: Icon(Icons.check_rounded, color: Zc.success, size: 26),
-            ),
-        ]),
-      ),
+class _Loading extends StatelessWidget {
+  const _Loading();
+
+  @override
+  Widget build(BuildContext context) {
+    final top = MediaQuery.sizeOf(context).height * 0.2;
+    return Padding(
+      padding: EdgeInsets.only(left: pageLeft, top: top),
+      child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SkeletonBox(width: 520, height: 120),
+        SizedBox(height: 24),
+        SkeletonBox(width: 420, height: 28, radius: 6),
+        SizedBox(height: 24),
+        SkeletonBox(width: 900, height: 90, radius: 8),
+      ]),
     );
   }
 }

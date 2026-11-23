@@ -120,7 +120,10 @@ final class FnOsPlayback {
   }
 
   /// Runs one playback and completes when the player is dismissed.
-  Future<void> play(FnOsItem item) async {
+  ///
+  /// [fromStart] ignores the server-side resume position, for the "从头播放"
+  /// button next to the resume one.
+  Future<void> play(FnOsItem item, {bool fromStart = false}) async {
     _item = item;
     final backend = createPlayer(
       navigator: navigator,
@@ -161,7 +164,7 @@ final class FnOsPlayback {
       _audioGuid = _s(map, 'audio_guid') ?? '';
       _subtitleGuid = _s(map, 'subtitle_guid');
       _durationHint = (((map['item'] as Map?)?['duration'] ?? map['duration']) as num?)?.toInt() ?? 0;
-      final ts = (map['ts'] as num?)?.toInt() ?? 0;
+      final ts = fromStart ? 0 : ((map['ts'] as num?)?.toInt() ?? 0);
 
       // Default play shape: the NAS media/range proxy for local files. The
       // stream call may resolve a cloud/STRM link that replaces it.
@@ -687,8 +690,9 @@ final class _ResolvedStream {
   final Map<String, String> cdnHeaders;
 }
 
-/// Launches fnOS playback from a UI context.
-Future<void> playFnOs(BuildContext context, FnOsItem item) async {
+/// Launches fnOS playback from a UI context. [fromStart] starts at 0 instead of
+/// the position the server reports for this item.
+Future<void> playFnOs(BuildContext context, FnOsItem item, {bool fromStart = false}) async {
   final services = AppServicesScope.read(context);
   final client = services.janus.fnos;
   if (client == null) return;
@@ -705,5 +709,5 @@ Future<void> playFnOs(BuildContext context, FnOsItem item) async {
     acceptInvalidCertificates: acceptInvalid,
     deviceId: deviceId,
   );
-  unawaited(playback.play(item));
+  unawaited(playback.play(item, fromStart: fromStart));
 }
