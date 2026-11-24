@@ -8,7 +8,7 @@ import '../host.dart';
 import 'log_sink.dart';
 
 abstract final class AppLog {
-  static const appVersion = '2.10.19+42';
+  static const appVersion = '2.10.20+43';
 
   static LogSink? _sink;
   static DebugPrintCallback? _console;
@@ -53,6 +53,22 @@ abstract final class AppLog {
         write('[system] $line');
       }
     }));
+  }
+
+  /// Paints widget / layout errors on screen instead of the bare dark rectangle
+  /// a release build shows by default.
+  ///
+  /// That rectangle is indistinguishable from an empty page: the "Emby home is
+  /// completely black" report was a thrown exception whose text and stack only
+  /// existed in a log that had stopped working. From now on the message is on
+  /// the screen *and* in the log, so the next one is a one-look diagnosis.
+  static void captureBuildErrors() {
+    ErrorWidget.builder = (details) {
+      final text = details.exceptionAsString();
+      write('[error] widget: $text\n'
+          '  context: ${details.context?.toDescription() ?? '-'}  library: ${details.library ?? '-'}\n${details.stack ?? ''}');
+      return ErrorPanel(message: text);
+    };
   }
 
   static void write(String message) {
@@ -111,6 +127,50 @@ abstract final class AppLog {
 
   @visibleForTesting
   static void stopWatchingFrames() => _frameReport?.cancel();
+}
+
+/// Stand-in for a widget that failed to build: no theme, no services, no
+/// localization, because whatever broke may have taken those with it.
+class ErrorPanel extends StatelessWidget {
+  const ErrorPanel({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = message.length > 900 ? '${message.substring(0, 900)}…' : message;
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: ColoredBox(
+        color: const Color(0xFF16090D),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(32, 96, 32, 32),
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: SingleChildScrollView(
+              child: DefaultTextStyle(
+                style: const TextStyle(color: Color(0xFFFFC9C9), fontSize: 15, height: 1.45),
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  DefaultTextStyle(
+                    style: const TextStyle(color: Color(0xFFFF7B7B), fontSize: 20, fontWeight: FontWeight.w700, height: 1.4),
+                    child: const Text('This screen failed to render'),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(shown),
+                  const SizedBox(height: 18),
+                  const DefaultTextStyle(
+                    style: TextStyle(color: Color(0xFF9A8080), fontSize: 14, height: 1.5),
+                    child: Text('The full stack is in the log: Settings → About → open log folder.\n'
+                        'Report it with the file name, it is timestamped.'),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class LogNavigatorObserver extends NavigatorObserver {

@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.19'
+  APP_VERSION: '2.10.20'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -340,4 +340,16 @@ jobs:
 
             **设置里去掉开关下面的说明文字**
             「首页推荐影视主题」下面那段小字删掉了，只留标题。
+
+            **首页黑屏（第二层原因）：页面根本没建出来**
+            上一版把黑屏归到并发，其实还漏了一层：首页的行列表是在 `didChangeDependencies` 里构造的，在那里抛异常会被框架吞掉，行列表留在 null，页面就渲染成一个「没有行」的空列表 —— 只有底色，连骨架都不显示。现在建行整体包了兜底：出错会把异常和堆栈写进日志，并退回「继续观看」一行；「每个媒体库」列表加了 15 秒超时，请求卡住也不会让下半页永远缺席；真的什么都没有时给一行提示和「重试」按钮。
+
+            **报错会直接显示在屏幕上**
+            release 版里某个界面构建出错，默认只画一块深色矩形，和「页面空白」根本分不出来。现在异常信息会直接画在出问题的那一块上，同时写进日志（`[error] widget:`），下次一眼就能看出是哪一行。
+
+            **日志不会再写不出来**
+            日志原来走 `IOSink` + `await flush()`：那个 future 一旦不返回，整份日志就停在 0 字节 —— 这次就是这样，进程一直在跑、日志文件是空的，等于把排查的灯关了。现在改成同步追加写，写失败只报一次，不会再卡住。
+
+            **启动全屏等待加上限**
+            进全屏的调用最多等 3 秒，窗口管理器没回应也照常往下走，不会出现「窗口起了但首页永远是黑的」。
 

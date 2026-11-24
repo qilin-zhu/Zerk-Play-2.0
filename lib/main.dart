@@ -32,13 +32,18 @@ import 'ui/theme/tokens.dart';
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppLog.init();
+  AppLog.captureBuildErrors();
   AppLog.watchFrames();
   WidgetsBinding.instance.addPostFrameCallback((_) => AppLog.mark('first frame'));
   if (Host.isWindows) await _initWindow();
   final services = await AppServices.create();
   if (Host.isDesktop && services.settings.startFullScreen) {
     debugPrint('[app] starting in full screen');
-    await NativeWindow.setFullScreen(true);
+    // Bounded: a window-manager call that never answers must not keep the app
+    // from painting its first frame, which reads as a black window.
+    await NativeWindow.setFullScreen(true).timeout(const Duration(seconds: 3), onTimeout: () {
+      AppLog.write('[app] full screen: no answer in 3 s, carrying on windowed');
+    });
   }
   unawaited(UiSounds.load());
   Gamepad.start();

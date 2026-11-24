@@ -5,18 +5,31 @@ import 'dart:ui' show PlatformDispatcher;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+/// Append-only log file.
+///
+/// The buffered lines are pushed to disk through a **synchronous** file handle.
+/// The previous version wrote through an [IOSink] and `await`ed `flush()`: when
+/// that future did not complete, the sink stayed "flushing" for the rest of the
+/// session, every later line was parked in memory and the file on disk stayed at
+/// zero bytes - a release build that produced no log at all while the app was
+/// still clearly running. A synchronous handle cannot get stuck like that, and a
+/// failed write is reported once instead of wedging the channel.
 final class LogSink {
   LogSink._(this.directory, this.file, this._out);
 
   static const _keep = 12;
 
+  /// Ceiling for the in-memory buffer: a runaway writer must not eat the
+  /// process memory while the disk is unavailable.
+  static const _maxBuffered = 256 * 1024;
+
   final String directory;
   final String file;
-  final IOSink _out;
-  Timer? _flushTimer;
-  bool _flushing = false;
 
-  final _held = <String>[];
+  final RandomAccessFile? _out;
+  Timer? _timer;
+  final _pending = StringBuffer();
+  Object? _lastFailure;
 
   static Future<LogSink> open() async {
     final dir = Directory(p.join((await getApplicationSupportDirectory()).path, 'logs'));
@@ -26,7 +39,13 @@ final class LogSink {
     String two(int v) => v.toString().padLeft(2, '0');
     final name = 'zerkplay-${now.year}${two(now.month)}${two(now.day)}-${two(now.hour)}${two(now.minute)}${two(now.second)}.log';
     final path = p.join(dir.path, name);
-    return LogSink._(dir.path, path, File(path).openWrite(mode: FileMode.append));
+    RandomAccessFile? out;
+    try {
+      out = File(path).openSync(mode: FileMode.append);
+    } catch (_) {
+      out = null;
+    }
+    return LogSink._(dir.path, path, out);
   }
 
   static void _prune(Directory dir) {
@@ -42,33 +61,39 @@ final class LogSink {
   }
 
   void add(String line) {
-    if (_flushing) {
-      _held.add(line);
-    } else {
-      try {
-        _out.writeln(line);
-      } catch (_) {}
+    _pending.write(line);
+    _pending.write('\n');
+    if (_pending.length >= _maxBuffered) {
+      _flushNow();
+      return;
     }
-    _flushTimer ??= Timer(const Duration(milliseconds: 800), () {
-      _flushTimer = null;
-      unawaited(flush());
+    _timer ??= Timer(const Duration(milliseconds: 400), () {
+      _timer = null;
+      _flushNow();
     });
   }
 
-  Future<void> flush() async {
-    if (_flushing) return;
-    _flushing = true;
+  Future<void> flush() async => _flushNow();
+
+  void _flushNow() {
+    _timer?.cancel();
+    _timer = null;
+    final out = _out;
+    if (out == null || _pending.isEmpty) return;
+    final text = _pending.toString();
+    _pending.clear();
     try {
-      await _out.flush();
-    } catch (_) {
-    } finally {
-      _flushing = false;
-    }
-    if (_held.isEmpty) return;
-    final held = List.of(_held);
-    _held.clear();
-    for (final line in held) {
-      add(line);
+      out.writeStringSync(text);
+      out.flushSync();
+      _lastFailure = null;
+    } catch (e) {
+      // Report once, then keep the text for the next attempt so a transient
+      // failure does not silently swallow the session's log.
+      if (!identical(e, _lastFailure)) {
+        _lastFailure = e;
+        stderr.writeln('[log] write failed: $e');
+      }
+      if (_pending.length < _maxBuffered) _pending.write(text);
     }
   }
 

@@ -264,7 +264,7 @@ class _HomePageState extends State<HomePage> {
   /// time. Each finished row lands back here through [_load], so the rest of
   /// the list follows on its own.
   void _pumpLibrary() {
-    if (!_loaded || !mounted) return;
+    if (!mounted) return;
     final rows = _rows!;
     final viewport = _scroll.hasClients ? _scroll.position.viewportDimension : MediaQuery.sizeOf(context).height;
     final offset = _scroll.hasClients ? _scroll.offset : 0.0;
@@ -286,15 +286,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onScroll() {
+    final rows = _rows;
+    if (rows == null) return;
     if (_libraryLayout) {
       // Row heights swing between poster and landscape, so the fixed 320 px
       // step of the theme home does not apply; the loader keeps its own cap.
-      if (_rows!.any((r) => !_allowed.contains(r))) _pump();
+      if (rows.any((r) => !_allowed.contains(r))) _pump();
       return;
     }
     final offset = _scroll.hasClients ? _scroll.offset : 0.0;
     final upTo = (offset + MediaQuery.sizeOf(context).height * 2) ~/ 320;
-    if (upTo >= 0 && _rows!.take(upTo + 1).any((r) => !_allowed.contains(r))) _pump(upTo: upTo);
+    if (upTo >= 0 && rows.take(upTo + 1).any((r) => !_allowed.contains(r))) _pump(upTo: upTo);
   }
 
   void _awaitFirstRows() {
@@ -310,7 +312,7 @@ class _HomePageState extends State<HomePage> {
       if (mounted && !_loaded && AppServicesScope.read(context).isSignedIn) setState(() => _showLoader = true);
     });
     Future.wait(first.map((r) => _load(r).catchError((Object _) => const <Object>[])))
-        .timeout(const Duration(seconds: 45), onTimeout: () => const [])
+        .timeout(const Duration(seconds: 12), onTimeout: () => const [])
         .whenComplete(() {
       AppLog.mark('home rows loaded');
       HomePage.firstLoad.value = false;
@@ -405,7 +407,26 @@ class _HomePageState extends State<HomePage> {
     // "recommendation theme" is the poster carousel plus the taste rows, the
     // other one is Emby's own web home.
     _libraryLayout = !s.settings.homeRecommendationTheme;
-    return _libraryLayout ? _buildLibraryRows(s) : _buildThemeRows(s);
+    try {
+      final rows = _libraryLayout ? _buildLibraryRows(s) : _buildThemeRows(s);
+      if (rows.isNotEmpty) return rows;
+      AppLog.write('[home] rows builder returned nothing, falling back to continue watching');
+    } catch (e, st) {
+      // This runs from didChangeDependencies, where a throw is swallowed by the
+      // framework and leaves [_rows] null: the page then renders an empty scroll
+      // area painted with the background colour and nothing else, which is the
+      // "home is completely black" report. One row is always better than that.
+      AppLog.write('[home] rows builder failed: $e\n$st');
+    }
+    return [
+      _continueRow ??= _Row(
+        (l) => l.continueWatching,
+        () => s.catalog.continueWatching(),
+        kind: _Kind.continueWatching,
+        recommends: false,
+        height: _rowHeightOf(_Kind.continueWatching, CardStyle.landscape),
+      ),
+    ];
   }
 
   /// Web-like home: continue watching, the library tiles, then the latest
@@ -467,7 +488,10 @@ class _HomePageState extends State<HomePage> {
   void _requestViews(AppServices s) {
     if (_viewsRequested) return;
     _viewsRequested = true;
-    s.catalog.views().then((views) {
+    // Bounded: an unanswered `/Views` used to leave [_views] null for good, and
+    // with it the whole library half of the page - no rows, and the empty state
+    // is gated on the list being known, so the result was a bare background.
+    s.catalog.views().timeout(const Duration(seconds: 15)).then((views) {
       if (!mounted) return;
       AppLog.write('[home] library views: ${views.length} (${[for (final v in views) v.name].join(', ')})');
       // The row caches stay: continue watching is the same [_Row] instance and
@@ -916,9 +940,10 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
-        // Only once the library list is known: before that the page is simply
-        // still loading, and the skeleton rows say so.
-        if (_loaded && _views != null && (rows.isEmpty || _libraryIsEmpty(rows)))
+        // Also covers a row builder that produced nothing at all: an empty
+        // scroll area painted with the background colour is the one thing this
+        // page must never show.
+        if (rows.isEmpty || (_loaded && _views != null && _libraryIsEmpty(rows)))
           Positioned.fill(child: _libraryEmpty(context)),
         _firstLoadOverlay(context),
       ]),
@@ -959,6 +984,11 @@ class _HomePageState extends State<HomePage> {
     if (!_showLoader || _loaded || !AppServicesScope.of(context).isSignedIn) {
       return const SizedBox.shrink();
     }
+    // The library home draws its own skeleton rows from the very first frame, so
+    // this veil would only cover them. It is also the heaviest widget in the app
+    // (a wall of TMDB stills), a lot of traffic for a screen that is about to be
+    // replaced.
+    if (_libraryLayout) return const SizedBox.shrink();
     return const Positioned.fill(child: IgnorePointer(child: CinemaLoader()));
   }
   /// Height taken by the first row that actually renders: its title plus the
