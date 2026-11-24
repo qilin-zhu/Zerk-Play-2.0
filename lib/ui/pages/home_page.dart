@@ -266,23 +266,36 @@ class _HomePageState extends State<HomePage> {
   void _pumpLibrary() {
     if (!mounted) return;
     final rows = _rows!;
-    final viewport = _scroll.hasClients ? _scroll.position.viewportDimension : MediaQuery.sizeOf(context).height;
+    final size = MediaQuery.sizeOf(context);
+    // A controller attached to a list that has not been laid out yet reports a
+    // zero viewport, and with it every row would fall past the cut-off line.
+    final viewport = _scroll.hasClients && _scroll.position.viewportDimension > 1
+        ? _scroll.position.viewportDimension
+        : size.height;
     final offset = _scroll.hasClients ? _scroll.offset : 0.0;
     final bottom = offset + viewport * 1.4;
     var y = _libraryHomeTop;
     var changed = false;
     for (final row in rows) {
       if (y > bottom) break;
-      if (!_allowed.contains(row)) {
+      // Driven by what is still missing, not by what happens to be allowed: a
+      // row can be inside the first screen and yet never be built (an empty
+      // viewport, a stale scroll offset), and then nothing would ever ask the
+      // server for it.
+      if (!_data.containsKey(row)) {
         if (_loading >= _parallelRows) break;
         _allowed.add(row);
+        _loading++;
         changed = true;
-        if (!_data.containsKey(row)) _loading++;
         _load(row, counted: true);
       }
       y += row.height;
     }
-    if (changed) setState(() {});
+    if (changed) {
+      AppLog.write('[home] pump: rows=${rows.length} allowed=${_allowed.length} '
+          'loading=$_loading y=${y.round()} bottom=${bottom.round()}');
+      setState(() {});
+    }
   }
 
   void _onScroll() {
@@ -499,8 +512,10 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _views = views;
         _rows = _buildLibraryRows(_services ?? s);
+        _libraryLogged = false;
         _allowFirstRows();
       });
+      AppLog.write('[home] library rows: ${_rows!.length} (${views.length} views)');
       WidgetsBinding.instance.addPostFrameCallback((_) => _pump());
     }).catchError((Object e) {
       AppLog.write('[home] library views failed: $e');
@@ -851,7 +866,10 @@ class _HomePageState extends State<HomePage> {
       canRequestFocus: false,
       skipTraversal: true,
       onKeyEvent: _pageKeys,
-      child: Stack(children: [
+      // Expand: every child here is positioned, and the page is laid out under a
+      // loose constraint, so the stack must claim the whole viewport itself
+      // instead of sizing off its children.
+      child: Stack(fit: StackFit.expand, children: [
         // Poster layer (bottom): pinned and full-bleed.
         Positioned(
           left: 0,
@@ -922,7 +940,7 @@ class _HomePageState extends State<HomePage> {
       // nothing behind them, so it paints its own background. Without it a page
       // whose rows are still loading reads as a black window.
       color: Zc.background,
-      child: Stack(children: [
+      child: Stack(fit: StackFit.expand, children: [
         Positioned.fill(
           child: NotificationListener<ScrollNotification>(
             onNotification: (n) {
@@ -981,14 +999,20 @@ class _HomePageState extends State<HomePage> {
   /// of the page for good - which is exactly the "shows the page, then all
   /// black" report this exists to rule out.
   Widget _firstLoadOverlay(BuildContext context) {
+    // Always a positioned child, even when there is nothing to show. The page is
+    // mounted under a loose constraint (the shell's Offstage gives it 0..screen),
+    // and RenderStack sizes itself from its non-positioned children: a bare
+    // `SizedBox.shrink()` here made the whole stack 0x0, the row list got a
+    // zero-height viewport, no item was ever built and the home page came out
+    // completely black with no requests and no skeleton rows.
     if (!_showLoader || _loaded || !AppServicesScope.of(context).isSignedIn) {
-      return const SizedBox.shrink();
+      return const Positioned.fill(child: SizedBox.shrink());
     }
     // The library home draws its own skeleton rows from the very first frame, so
     // this veil would only cover them. It is also the heaviest widget in the app
     // (a wall of TMDB stills), a lot of traffic for a screen that is about to be
     // replaced.
-    if (_libraryLayout) return const SizedBox.shrink();
+    if (_libraryLayout) return const Positioned.fill(child: SizedBox.shrink());
     return const Positioned.fill(child: IgnorePointer(child: CinemaLoader()));
   }
   /// Height taken by the first row that actually renders: its title plus the
