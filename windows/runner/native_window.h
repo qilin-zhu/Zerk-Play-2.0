@@ -5,13 +5,21 @@
 #include <flutter/method_channel.h>
 #include <windows.h>
 
+#include <functional>
 #include <memory>
+#include <utility>
 
 class NativeWindow {
  public:
   NativeWindow(HWND window, flutter::BinaryMessenger* messenger);
 
   ~NativeWindow();
+
+  /// Full screen lives in FlutterWindow (it needs the window procedure to drop
+  /// the resize border), so the channel forwards there.
+  void SetFullScreenHandler(std::function<bool(bool)> handler) {
+    fullscreen_handler_ = std::move(handler);
+  }
 
  private:
   struct HdrStatus {
@@ -21,12 +29,9 @@ class NativeWindow {
   HdrStatus GetHdrStatus() const;
   bool SetHdr(bool enabled);
 
-  // Full screen is not implemented here: window_manager owns it on the Dart
-  // side (see NativeWindow.setFullScreen), because the frameless hidden title
-  // bar it installs needs its own full-screen flag to drop the 8 px resize
-  // border. This class only carries the HDR switch.
   HWND window_;
   bool hdr_enabled_by_app_ = false;
+  std::function<bool(bool)> fullscreen_handler_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
 };
 

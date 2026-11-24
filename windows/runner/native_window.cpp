@@ -92,6 +92,12 @@ NativeWindow::NativeWindow(HWND window, flutter::BinaryMessenger* messenger) : w
       }));
     } else if (method == "setHdr" && arg) {
       result->Success(flutter::EncodableValue(SetHdr(*arg)));
+    } else if (method == "setFullScreen" && arg) {
+      if (!fullscreen_handler_) {
+        result->Success(flutter::EncodableValue(false));
+        return;
+      }
+      result->Success(flutter::EncodableValue(fullscreen_handler_(*arg)));
     } else {
       result->NotImplemented();
     }

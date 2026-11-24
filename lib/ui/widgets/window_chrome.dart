@@ -3,6 +3,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../core/host.dart';
 import '../../core/log/app_log.dart';
+import '../../core/windows/native_window.dart';
 
 /// Height of the invisible drag strip along the top edge of the window.
 const double kWindowDragBarHeight = 32;
@@ -26,7 +27,7 @@ class WindowChromeLayer extends StatefulWidget {
 }
 
 class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListener {
-  bool _fullScreen = false;
+  bool _fullScreen = NativeWindow.fullScreen.value;
   bool _maximized = false;
 
   @override
@@ -34,31 +35,32 @@ class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListen
     super.initState();
     if (!Host.isWindows) return;
     windowManager.addListener(this);
+    // Full screen on Windows is set by the runner, not by window_manager, so
+    // the plugin's enter/leave events never fire here; the notifier does.
+    NativeWindow.fullScreen.addListener(_onFullScreenChanged);
     AppLog.write('[win] frameless chrome (drag bar 32, capsule)');
     _sync();
   }
 
+  void _onFullScreenChanged() {
+    if (!mounted) return;
+    setState(() => _fullScreen = NativeWindow.fullScreen.value);
+  }
+
   Future<void> _sync() async {
-    final full = await windowManager.isFullScreen();
     final max = await windowManager.isMaximized();
-    if (!mounted || (full == _fullScreen && max == _maximized)) return;
-    setState(() {
-      _fullScreen = full;
-      _maximized = max;
-    });
+    if (!mounted || max == _maximized) return;
+    setState(() => _maximized = max);
   }
 
   @override
   void dispose() {
-    if (Host.isWindows) windowManager.removeListener(this);
+    if (Host.isWindows) {
+      windowManager.removeListener(this);
+      NativeWindow.fullScreen.removeListener(_onFullScreenChanged);
+    }
     super.dispose();
   }
-
-  @override
-  void onWindowEnterFullScreen() => setState(() => _fullScreen = true);
-
-  @override
-  void onWindowLeaveFullScreen() => setState(() => _fullScreen = false);
 
   @override
   void onWindowMaximize() => setState(() => _maximized = true);
@@ -72,14 +74,12 @@ class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListen
     } else {
       await windowManager.maximize();
     }
+    await _sync();
   }
 
   /// The capsule's middle glyph in full screen: leave it instead of toggling
   /// maximise, which means nothing on an already monitor-sized window.
-  Future<void> _leaveFullScreen() async {
-    await windowManager.setFullScreen(false);
-    await _sync();
-  }
+  Future<void> _leaveFullScreen() => NativeWindow.setFullScreen(false);
 
   @override
   Widget build(BuildContext context) {
@@ -138,11 +138,11 @@ class _Capsule extends StatelessWidget {
         children: [
           _ChromeButton(icon: Icons.remove, onTap: () => windowManager.minimize(), leftmost: true),
           _ChromeButton(
-            icon: fullScreen
-                ? Icons.close_fullscreen_rounded
-                : maximized
-                    ? Icons.filter_none
-                    : Icons.crop_square,
+            // Full screen and a maximised window are both "filling the screen",
+            // so they offer the same glyph and the same way back. A separate
+            // close-fullscreen icon made the capsule look like a different set
+            // of buttons depending on how the window was opened.
+            icon: fullScreen || maximized ? Icons.filter_none : Icons.crop_square,
             onTap: onToggleMaximize,
           ),
           _ChromeButton(

@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../host.dart';
+import '../log/app_log.dart';
 
 final class DisplayHdrStatus {
   const DisplayHdrStatus({this.supported = false, this.enabled = false});
@@ -14,23 +16,47 @@ final class DisplayHdrStatus {
 abstract final class NativeWindow {
   static const _channel = MethodChannel('zerk/window');
 
-  /// Full screen is owned by window_manager, not by a bare SetWindowPos.
+  /// True while the window covers a whole monitor, whichever way it was asked
+  /// for: the startup setting, F11, the capsule or the player. The chrome and
+  /// the playback backend read this instead of polling window_manager, because
+  /// on Windows full screen is ours.
+  static final ValueNotifier<bool> fullScreen = ValueNotifier<bool>(false);
+
+  /// On Windows the runner owns full screen (see `FlutterWindow::SetFullScreen`
+  /// in `windows/runner/flutter_window.cpp`).
   ///
-  /// The window is frameless with a hidden title bar, and window_manager keeps
-  /// an 8 px resize border around such a window while it is windowed - that is
-  /// how the edges stay draggable. Its WM_NCCALCSIZE hook only drops that
-  /// border when its own full-screen flag is set, so resizing the window from
-  /// here left the Flutter view 8 px short on the left, the right and the
-  /// bottom: an otherwise full-height window with a strip of desktop on both
-  /// sides. Going through window_manager keeps the state and the geometry in
-  /// one place, and the floating window controls hide themselves too.
+  /// window_manager's version cannot cover the monitor correctly for this
+  /// window: the title bar is hidden rather than frameless, so the plugin's
+  /// entry path calls SetAsFrameless() and then shrinks the client area by the
+  /// work-area offset on every WM_NCCALCSIZE (a strip of desktop along the
+  /// bottom), and its exit path restores the old frame without activating the
+  /// window, which left the app behind the desktop and deaf to the mouse.
   static Future<bool> isFullScreen() async {
+    if (Host.isWindows) return fullScreen.value;
     if (!Host.isDesktop) return false;
     return windowManager.isFullScreen();
   }
 
   static Future<void> setFullScreen(bool fullscreen) async {
-    if (Host.isDesktop) await windowManager.setFullScreen(fullscreen);
+    if (!Host.isDesktop) return;
+    if (Host.isWindows) {
+      final bool ok;
+      try {
+        ok = await _channel.invokeMethod<bool>('setFullScreen', fullscreen) ?? false;
+      } on PlatformException catch (e) {
+        AppLog.write('[win] setFullScreen($fullscreen): ${e.code} ${e.message}');
+        return;
+      }
+      if (!ok) {
+        AppLog.write('[win] setFullScreen($fullscreen): runner refused');
+        return;
+      }
+      fullScreen.value = fullscreen;
+      AppLog.write('[win] full screen ${fullscreen ? 'on' : 'off'}');
+      return;
+    }
+    await windowManager.setFullScreen(fullscreen);
+    fullScreen.value = fullscreen;
   }
 
   static Future<bool> toggleFullScreen() async {
