@@ -973,6 +973,13 @@ class _HomePageState extends State<HomePage> {
   /// First-load veil, shared by both layouts: without it the page flashes an
   /// empty stack of rows before the server answers.
   ///
+  /// Both layouts get it. It was briefly dropped for the library layout while
+  /// hunting the black page - the theory being it would only cover the skeleton
+  /// rows - and that turned out to have nothing to do with the real cause (a
+  /// zero-sized stack). Skeleton rows alone are not a loading state: on a slow
+  /// server the first resume/next-up pair takes seconds, and the page then sits
+  /// on grey placeholders instead of the film leader.
+  ///
   /// It leaves the tree the moment the rows are in instead of fading out. A
   /// loader kept around at zero opacity goes on ticking and repainting the
   /// whole window, and if that fade ever fails to report back it stays on top
@@ -988,11 +995,6 @@ class _HomePageState extends State<HomePage> {
     if (!_showLoader || _loaded || !AppServicesScope.of(context).isSignedIn) {
       return const Positioned.fill(child: SizedBox.shrink());
     }
-    // The library home draws its own skeleton rows from the very first frame, so
-    // this veil would only cover them. It is also the heaviest widget in the app
-    // (a wall of TMDB stills), a lot of traffic for a screen that is about to be
-    // replaced.
-    if (_libraryLayout) return const Positioned.fill(child: SizedBox.shrink());
     return const Positioned.fill(child: IgnorePointer(child: CinemaLoader()));
   }
   /// Height taken by the first row that actually renders: its title plus the
