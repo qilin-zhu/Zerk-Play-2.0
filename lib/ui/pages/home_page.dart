@@ -125,8 +125,6 @@ class _HomePageState extends State<HomePage> {
   /// Title block of a row: 18 px bottom padding + the text line.
   static const _rowTitleH = 48.0;
 
-  /// Top of the library layout: leaves room for the rail mark and the clock.
-  static const _libraryHomeTop = 88.0;
   static const _maxFade = 320.0;
   static const _heroFocusH = 44.0;
   static const _arrowLeft = 88.0;
@@ -274,7 +272,8 @@ class _HomePageState extends State<HomePage> {
         : size.height;
     final offset = _scroll.hasClients ? _scroll.offset : 0.0;
     final bottom = offset + viewport * 1.4;
-    var y = _libraryHomeTop;
+    // The rows start where the poster lets them through, not at a fixed top.
+    var y = _rowTop;
     var changed = false;
     for (final row in rows) {
       if (y > bottom) break;
@@ -443,7 +442,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Web-like home: continue watching, the library tiles, then the latest
-  /// additions of each library. No poster, no recommendation machinery.
+  /// additions of each library. Same stage as the theme home - the poster
+  /// carousel is above the rows there too - but no taste-based rows.
   List<_Row> _buildLibraryRows(AppServices s) {
     if (_views == null) _requestViews(s);
     final c = s.catalog;
@@ -471,10 +471,13 @@ class _HomePageState extends State<HomePage> {
           (_) => view.name,
           () => c.latest(parentId: view.id, limit: 24),
           kind: _Kind.library,
-          style: view.collectionType == 'tvshows' ? CardStyle.landscape : CardStyle.poster,
+          // Posters for every shelf, shows included: an `Items/Latest` of a TV
+          // library answers with episodes, and an episode's own still is a
+          // 16:9 frame. `catalog.poster` already redirects an episode to its
+          // series' vertical artwork, so one style covers every library.
+          style: CardStyle.poster,
           recommends: false,
-          height: _rowHeightOf(
-              _Kind.library, view.collectionType == 'tvshows' ? CardStyle.landscape : CardStyle.poster),
+          height: _rowHeightOf(_Kind.library, CardStyle.poster),
         ),
     ];
   }
@@ -737,11 +740,15 @@ class _HomePageState extends State<HomePage> {
         }
       });
 
-  HeroInfo _heroInfoOf(Object data) {
+  /// Hero copy of a row entry, or null for something the poster cannot
+  /// describe - the "My Media" tiles are bare library folders, not media.
+  HeroInfo? _heroInfoOf(Object data) {
     final l10n = context.l10n;
-    return data is EmbyItem
-        ? HeroInfo.fromItem(l10n, AppServicesScope.read(context), data)
-        : HeroInfo.fromRequest(l10n, data as SeerrMedia);
+    return switch (data) {
+      final EmbyItem item => HeroInfo.fromItem(l10n, AppServicesScope.read(context), item),
+      final SeerrMedia media => HeroInfo.fromRequest(l10n, media),
+      _ => null,
+    };
   }
 
   void _publishItem(Object data, HeroInfo info, {bool immediate = false}) {
@@ -751,14 +758,14 @@ class _HomePageState extends State<HomePage> {
 
   /// A card was hovered or focused: show that resource and park the carousel.
   void _focusData(Object data, {bool immediate = false}) {
-    // The library home has no poster to pin; its rows also carry bare library
-    // folders, which the hero cannot describe.
-    if (_libraryLayout) return;
     if (_pinned && identical(_pinnedItem, data)) return;
+    final info = _heroInfoOf(data);
+    // A library folder has nothing to show on the poster, and pinning it would
+    // park the carousel on a still frame of whatever was there before.
+    if (info == null) return;
     _slideTimer?.cancel();
     _pinned = true;
     _pinnedItem = data;
-    final info = _heroInfoOf(data);
     _publishItem(data, info, immediate: immediate);
   }
 
@@ -766,17 +773,17 @@ class _HomePageState extends State<HomePage> {
   /// once so every visit starts on a different resource. Called after each row
   /// resolves: the first two items are enough, later rows are ignored.
   void _startCarousel() {
-    if (!mounted || _libraryLayout) return;
+    if (!mounted) return;
     if (_slides != null) return;
     final rows = _rows;
     if (rows == null) return;
     final seen = <String>{};
     final pool = <(Object, HeroInfo)>[];
     for (final row in rows) {
-      if (row.kind == _Kind.moods) continue;
+      if (row.kind == _Kind.moods || row.kind == _Kind.myMedia) continue;
       for (final item in _resolved[row] ?? const <Object>[]) {
         final info = _heroInfoOf(item);
-        if (!seen.add(info.key)) continue;
+        if (info == null || !seen.add(info.key)) continue;
         pool.add((item, info));
       }
     }
@@ -840,17 +847,23 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_libraryLayout) return _buildLibraryHome(context);
-    final rows = _rows!;
+    final rows = _rows ?? const <_Row>[];
     final size = MediaQuery.sizeOf(context);
     // Same stage as the fnOS home: a full-bleed 16:9 poster pinned to the top,
     // cropped from the bottom as the page scrolls, with the first row peeking
-    // over its lower edge.
+    // over its lower edge. Both homes share it: the library layout is the same
+    // page with different rows, not a second screen, so the carousel and its
+    // arrows work there too.
     final fullW = size.width.clamp(320.0, 4096.0);
     final fullH = fullW * 9 / 16;
     _fullH = fullH;
     _rowTop = (size.height - _rowPeek(rows)).clamp(0.0, fullH);
     _overlap = (fullH - _rowTop).clamp(0.0, fullH);
+    if (_libraryLayout && !_libraryLogged) {
+      _libraryLogged = true;
+      AppLog.write('[home] library home: ${rows.length} rows, ${_views?.length ?? -1} views, '
+          '${_allowed.length} allowed');
+    }
 
     final posterImage = ValueListenableBuilder<HeroInfo?>(
       valueListenable: _hero,
@@ -866,105 +879,72 @@ class _HomePageState extends State<HomePage> {
       canRequestFocus: false,
       skipTraversal: true,
       onKeyEvent: _pageKeys,
-      // Expand: every child here is positioned, and the page is laid out under a
-      // loose constraint, so the stack must claim the whole viewport itself
-      // instead of sizing off its children.
-      child: Stack(fit: StackFit.expand, children: [
-        // Poster layer (bottom): pinned and full-bleed.
-        Positioned(
-          left: 0,
-          top: 0,
-          right: 0,
-          child: ValueListenableBuilder<double>(
-            valueListenable: _scrollOffset,
-            builder: (context, offset, _) {
-              final h = (fullH - offset).clamp(0.0, fullH);
-              if (h <= 0.5) return const SizedBox.shrink();
-              return _heroPoster(h, (offset / fullH).clamp(0.0, 1.0), posterImage, posterPanel);
-            },
+      child: ColoredBox(
+        // The poster only covers the top of the page: below it the rows sit on
+        // plain background, and that has to be painted even while they load.
+        color: Zc.background,
+        // Expand: every child here is positioned, and the page is laid out under
+        // a loose constraint, so the stack must claim the whole viewport itself
+        // instead of sizing off its children.
+        child: Stack(fit: StackFit.expand, children: [
+          // Poster layer (bottom): pinned and full-bleed.
+          Positioned(
+            left: 0,
+            top: 0,
+            right: 0,
+            child: ValueListenableBuilder<double>(
+              valueListenable: _scrollOffset,
+              builder: (context, offset, _) {
+                final h = (fullH - offset).clamp(0.0, fullH);
+                if (h <= 0.5) return const SizedBox.shrink();
+                return _heroPoster(h, (offset / fullH).clamp(0.0, 1.0), posterImage, posterPanel);
+              },
+            ),
           ),
-        ),
-        // Content layer (top): transparent, so the wheel scrolls from anywhere
-        // and the rows paint over the poster's bottom edge.
-        Positioned.fill(
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (n) {
-              // Every row is a horizontal ListView nested inside this page's
-              // viewport, so its notifications bubble up here too. Feeding
-              // their horizontal pixels into the poster offset would shove the
-              // artwork around on a plain Left/Right press.
-              final ad = n.metrics.axisDirection;
-              final vertical = ad == AxisDirection.down || ad == AxisDirection.up;
-              if (!vertical || n.depth != 0) return false;
-              _lastScrollMs = DateTime.now().millisecondsSinceEpoch;
-              if ((_scrollOffset.value - n.metrics.pixels).abs() > 0.5) {
-                _scrollOffset.value = n.metrics.pixels;
-              }
-              return false;
-            },
-            child: Listener(
-              onPointerSignal: _onPointerSignal,
-              child: Stack(fit: StackFit.expand, children: [
-                CardTrailers(
-                  child: RowsScrollView(
-                    controller: _scroll,
-                    top: _rowTop,
-                    children: [for (final (i, row) in rows.indexed) _buildRow(row, first: i == 0)],
+          // Content layer (top): transparent, so the wheel scrolls from anywhere
+          // and the rows paint over the poster's bottom edge.
+          Positioned.fill(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (n) {
+                // Every row is a horizontal ListView nested inside this page's
+                // viewport, so its notifications bubble up here too. Feeding
+                // their horizontal pixels into the poster offset would shove the
+                // artwork around on a plain Left/Right press.
+                final ad = n.metrics.axisDirection;
+                final vertical = ad == AxisDirection.down || ad == AxisDirection.up;
+                if (!vertical || n.depth != 0) return false;
+                _lastScrollMs = DateTime.now().millisecondsSinceEpoch;
+                if ((_scrollOffset.value - n.metrics.pixels).abs() > 0.5) {
+                  _scrollOffset.value = n.metrics.pixels;
+                }
+                return false;
+              },
+              child: Listener(
+                onPointerSignal: _onPointerSignal,
+                child: Stack(fit: StackFit.expand, children: [
+                  CardTrailers(
+                    child: RowsScrollView(
+                      controller: _scroll,
+                      top: _rowTop,
+                      children: [for (final (i, row) in rows.indexed) _buildRow(row, first: i == 0)],
+                    ),
                   ),
-                ),
-                ValueListenableBuilder<double>(
-                  valueListenable: _scrollOffset,
-                  builder: (context, offset, _) => _heroOverlay(fullH, offset),
-                ),
-              ]),
+                  ValueListenableBuilder<double>(
+                    valueListenable: _scrollOffset,
+                    builder: (context, offset, _) => _heroOverlay(fullH, offset),
+                  ),
+                ]),
+              ),
             ),
           ),
-        ),
-        _firstLoadOverlay(context),
-      ]),
-    );
-  }
-
-  /// The library home: a plain stack of rows under the header, exactly like the
-  /// web client draws it, with no poster behind them.
-  Widget _buildLibraryHome(BuildContext context) {
-    final rows = _rows ?? const <_Row>[];
-    final size = MediaQuery.sizeOf(context);
-    if (!_libraryLogged) {
-      _libraryLogged = true;
-      debugPrint('[home] library home: ${rows.length} rows, ${_views?.length ?? -1} views, '
-          '${_allowed.length} allowed');
-    }
-    return ColoredBox(
-      // The theme home paints a full-bleed poster behind its rows; this one has
-      // nothing behind them, so it paints its own background. Without it a page
-      // whose rows are still loading reads as a black window.
-      color: Zc.background,
-      child: Stack(fit: StackFit.expand, children: [
-        Positioned.fill(
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (n) {
-              _lastScrollMs = DateTime.now().millisecondsSinceEpoch;
-              return false;
-            },
-            child: ListView.builder(
-              controller: _scroll,
-              // Rows differ a lot in height (landscape rows are 406 px, poster
-              // rows 492 px) and a big account is ~8000 px of column, so they
-              // are built lazily instead of being laid out all at once.
-              padding: EdgeInsets.only(top: _libraryHomeTop, bottom: size.height * 0.5),
-              itemCount: rows.length,
-              itemBuilder: (context, i) => _buildRow(rows[i], first: i == 0),
-            ),
-          ),
-        ),
-        // Also covers a row builder that produced nothing at all: an empty
-        // scroll area painted with the background colour is the one thing this
-        // page must never show.
-        if (rows.isEmpty || (_loaded && _views != null && _libraryIsEmpty(rows)))
-          Positioned.fill(child: _libraryEmpty(context)),
-        _firstLoadOverlay(context),
-      ]),
+          // Also covers a row builder that produced nothing at all: an empty
+          // scroll area painted with the background colour is the one thing
+          // this page must never show.
+          if (_libraryLayout && (rows.isEmpty || (_loaded && _views != null && _libraryIsEmpty(rows))))
+            Positioned.fill(child: _libraryEmpty(context)),
+          _firstLoadOverlay(context),
+        ]),
+      ),
     );
   }
 
@@ -1373,8 +1353,9 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/// A "My Media" tile: the library's own artwork with its name on a scrim, the
-/// way the web client draws the folder shortcuts on its home screen.
+/// A "My Media" tile: the library's own artwork with its name underneath, in
+/// the exact frame of the continue-watching cards above it - same width, same
+/// 16:9 crop, same 14 px caption gap - so the two rows line up as one grid.
 class _LibraryCard extends StatelessWidget {
   const _LibraryCard({required this.view, this.autofocus = false, this.onFocus, this.onSelect});
 
@@ -1395,42 +1376,41 @@ class _LibraryCard extends StatelessWidget {
       onFocusChange: (f) => f ? onFocus?.call() : null,
       builder: (context, focused) => SizedBox(
         width: _width,
-        child: FocusFrame(
-          focused: focused,
-          child: SizedBox(
-            width: _width,
-            height: _height,
-            child: Stack(fit: StackFit.expand, children: [
-              NetImage(
-                url: catalog.image(view.id, ImageKind.primary, tag: view.imageTag, width: (_width * 1.6).round()),
-                width: _width,
-                height: _height,
-                fallback: TitleArt(title: view.name, icon: _icon(view)),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(18, 30, 18, 14),
-                  decoration: const BoxDecoration(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          FocusFrame(
+            focused: focused,
+            scale: 1.06,
+            child: SizedBox(
+              width: _width,
+              height: _height,
+              child: Stack(fit: StackFit.expand, children: [
+                NetImage(
+                  url: catalog.image(view.id, ImageKind.primary, tag: view.imageTag, width: (_width * 1.2).round()),
+                  width: _width,
+                  height: _height,
+                  fallback: TitleArt(title: view.name, icon: _icon(view)),
+                ),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
-                      colors: [Color(0xE6000000), Color(0x00000000)],
+                      stops: [0, 0.45],
+                      colors: [Color(0x88000000), Color(0x00000000)],
                     ),
                   ),
-                  child: Text(
-                    view.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Zt.title.copyWith(fontWeight: FontWeight.w700),
-                  ),
                 ),
-              ),
-            ]),
+              ]),
+            ),
           ),
-        ),
+          const SizedBox(height: 14),
+          Text(
+            view.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Zt.label.copyWith(color: focused ? Zc.text : Zc.textMuted),
+          ),
+        ]),
       ),
     );
   }

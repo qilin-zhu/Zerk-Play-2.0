@@ -13,8 +13,11 @@ const double kWindowDragBarHeight = 32;
 /// It is installed above the Navigator (see `ZerkApp.builder`) so every screen
 /// has it, including the sign-in and onboarding pages that live outside the
 /// app shell; without that a frameless window could not be moved or closed
-/// there. Both parts disappear in full screen, where the strip would only
-/// swallow clicks meant for the page.
+/// there. The drag strip is pointless in full screen (moving a monitor-sized
+/// window goes nowhere) and would only swallow clicks meant for the page, so it
+/// is dropped there; the capsule stays, because a frameless full-screen window
+/// has no OS buttons and the three glyphs would otherwise be the only way in or
+/// out of the app gone.
 class WindowChromeLayer extends StatefulWidget {
   const WindowChromeLayer({super.key});
 
@@ -71,29 +74,41 @@ class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListen
     }
   }
 
+  /// The capsule's middle glyph in full screen: leave it instead of toggling
+  /// maximise, which means nothing on an already monitor-sized window.
+  Future<void> _leaveFullScreen() async {
+    await windowManager.setFullScreen(false);
+    await _sync();
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (!Host.isWindows || _fullScreen) return const SizedBox.shrink();
+    if (!Host.isWindows) return const SizedBox.shrink();
     return Stack(
       children: [
-        // Opaque on purpose: a drag that started on the page underneath (a row
-        // or poster drag) would fight the window move.
-        Positioned(
-          left: 0,
-          top: 0,
-          right: 0,
-          height: kWindowDragBarHeight,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onPanStart: (_) => windowManager.startDragging(),
-            onDoubleTap: _toggleMaximize,
-            child: const SizedBox.expand(),
+        if (!_fullScreen)
+          // Opaque on purpose: a drag that started on the page underneath (a row
+          // or poster drag) would fight the window move.
+          Positioned(
+            left: 0,
+            top: 0,
+            right: 0,
+            height: kWindowDragBarHeight,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanStart: (_) => windowManager.startDragging(),
+              onDoubleTap: _toggleMaximize,
+              child: const SizedBox.expand(),
+            ),
           ),
-        ),
         Positioned(
           top: 12,
           right: 16,
-          child: _Capsule(maximized: _maximized, onToggleMaximize: _toggleMaximize),
+          child: _Capsule(
+            maximized: _maximized,
+            fullScreen: _fullScreen,
+            onToggleMaximize: _fullScreen ? _leaveFullScreen : _toggleMaximize,
+          ),
         ),
       ],
     );
@@ -102,9 +117,10 @@ class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListen
 
 /// The translucent pill of the reference design: three glyphs, no dividers.
 class _Capsule extends StatelessWidget {
-  const _Capsule({required this.maximized, required this.onToggleMaximize});
+  const _Capsule({required this.maximized, required this.fullScreen, required this.onToggleMaximize});
 
   final bool maximized;
+  final bool fullScreen;
   final VoidCallback onToggleMaximize;
 
   @override
@@ -122,7 +138,11 @@ class _Capsule extends StatelessWidget {
         children: [
           _ChromeButton(icon: Icons.remove, onTap: () => windowManager.minimize(), leftmost: true),
           _ChromeButton(
-            icon: maximized ? Icons.filter_none : Icons.crop_square,
+            icon: fullScreen
+                ? Icons.close_fullscreen_rounded
+                : maximized
+                    ? Icons.filter_none
+                    : Icons.crop_square,
             onTap: onToggleMaximize,
           ),
           _ChromeButton(
