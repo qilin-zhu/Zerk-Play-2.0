@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../core/emby/models/emby_item.dart';
+import '../../data/catalog_api.dart' show LibraryView;
 import '../../data/seerr_api.dart';
 import '../core/navigation.dart';
 import 'collection_page.dart';
 import 'details_page.dart';
+// `show` on purpose: library_page.dart has its own `LibraryView` enum (the grid
+// style), which would clash with the catalog's library folder class.
+import 'library_page.dart' show LibraryKind, LibraryPage;
 import 'person_page.dart';
 import 'request_page.dart';
 import 'series_page.dart';
@@ -38,4 +42,19 @@ void openRequest(BuildContext context, SeerrMedia media) {
 
 void openPerson(BuildContext context, Person person) {
   Navigator.of(context).push(tvRoute(PersonPage(person: person), name: 'person:${person.id}'));
+}
+
+/// A library folder from the "My Media" row of the home screen.
+void openLibrary(BuildContext context, LibraryView view) {
+  Navigator.of(context).push(
+    tvRoute(
+      LibraryPage(
+        kind: view.collectionType == 'tvshows' ? LibraryKind.shows : LibraryKind.movies,
+        parentId: view.id,
+        title: view.name,
+        collectionType: view.collectionType,
+      ),
+      name: 'library:${view.id}',
+    ),
+  );
 }

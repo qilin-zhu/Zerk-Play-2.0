@@ -23,7 +23,9 @@ import '../theme/tokens.dart';
 import '../widgets/backdrop.dart';
 import '../widgets/cards.dart';
 import '../widgets/cinema_loader.dart';
+import '../widgets/common.dart';
 import '../widgets/media_row.dart';
+import '../widgets/net_image.dart';
 import '../widgets/rows_scroll_view.dart';
 import '../widgets/mixed_cards.dart';
 import '../widgets/mood_shelf.dart';
@@ -39,6 +41,12 @@ enum _Kind {
   collections,
 
   moods,
+
+  /// "My Media": one tile per library, straight from the server's view list.
+  myMedia,
+
+  /// One row of the latest additions of a single library.
+  library,
 }
 
 class _Row {
@@ -110,6 +118,9 @@ class _HomePageState extends State<HomePage> {
 
   /// Title block of a row: 18 px bottom padding + the text line.
   static const _rowTitleH = 48.0;
+
+  /// Top of the library layout: leaves room for the rail mark and the clock.
+  static const _libraryHomeTop = 88.0;
   static const _maxFade = 320.0;
   static const _heroFocusH = 44.0;
   static const _arrowLeft = 88.0;
@@ -137,6 +148,16 @@ class _HomePageState extends State<HomePage> {
 
   AppServices? _services;
   String _pickedCollections = '';
+
+  /// Which of the two homes is on screen. Mirrors
+  /// [AppSettings.homeRecommendationTheme]; when it is off the page is the
+  /// web-like library layout (continue watching, my media, one row per library)
+  /// and none of the poster machinery below applies.
+  bool _libraryLayout = false;
+
+  /// Libraries of the server, only loaded for the library layout.
+  List<LibraryView>? _views;
+  bool _viewsRequested = false;
 
   _Row? _myListRow;
   String _myListKeys = '';
@@ -166,11 +187,16 @@ class _HomePageState extends State<HomePage> {
   static String _collectionsKey(AppServices s) => [for (final (id, _) in _collections(s)) id].join(',');
 
   void _onServices() {
-    final key = _collectionsKey(_services!);
-    if (key == _pickedCollections || !mounted) return;
+    if (!mounted) return;
+    final s = _services!;
+    final key = _collectionsKey(s);
+    final layout = !s.settings.homeRecommendationTheme;
+    if (key == _pickedCollections && layout == _libraryLayout) return;
     _pickedCollections = key;
+    _slideTimer?.cancel();
+    _slides = null;
     setState(() {
-      _rows = _buildRows(_services!);
+      _rows = _buildRows(s);
       _data.clear();
       _resolved.clear();
       _allowFirstRows();
@@ -187,9 +213,14 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _allowFirstRows() {
-    _allowed
-      ..clear()
-      ..addAll(_rows!.take(6).where((r) => !r.recommends && r.kind != _Kind.moods));
+    _allowed.clear();
+    // The library home is short (a handful of rows) and every row is visible
+    // almost at once, so they are all allowed immediately.
+    if (_libraryLayout) {
+      _allowed.addAll(_rows!);
+      return;
+    }
+    _allowed.addAll(_rows!.take(6).where((r) => !r.recommends && r.kind != _Kind.moods));
   }
 
   void _pump({int upTo = -1}) {
@@ -321,6 +352,64 @@ class _HomePageState extends State<HomePage> {
       });
 
   List<_Row> _buildRows(AppServices s) {
+    // The setting decides the whole shape of the page, not just a row or two:
+    // "recommendation theme" is the poster carousel plus the taste rows, the
+    // other one is Emby's own web home.
+    _libraryLayout = !s.settings.homeRecommendationTheme;
+    return _libraryLayout ? _buildLibraryRows(s) : _buildThemeRows(s);
+  }
+
+  /// Web-like home: continue watching, the library tiles, then the latest
+  /// additions of each library. No poster, no recommendation machinery.
+  List<_Row> _buildLibraryRows(AppServices s) {
+    if (_views == null) _requestViews(s);
+    final c = s.catalog;
+    final libraries = [
+      for (final v in _views ?? const <LibraryView>[])
+        if (_isMediaLibrary(v)) v,
+    ];
+    return [
+      _Row((l) => l.continueWatching, () => c.continueWatching(), kind: _Kind.continueWatching, recommends: false),
+      if (libraries.isNotEmpty)
+        _Row((l) => l.myMedia, () async => List<Object>.of(libraries), kind: _Kind.myMedia, recommends: false),
+      for (final view in libraries)
+        _Row(
+          (_) => view.name,
+          () => c.latest(parentId: view.id, limit: 24),
+          kind: _Kind.library,
+          style: view.collectionType == 'tvshows' ? CardStyle.landscape : CardStyle.poster,
+          recommends: false,
+        ),
+    ];
+  }
+
+  /// Only the libraries this player can actually show: music / books shelves
+  /// would be empty rows. A view without a collection type holds mixed content
+  /// and stays.
+  static bool _isMediaLibrary(LibraryView v) => switch (v.collectionType) {
+        'movies' || 'tvshows' || 'mixed' || 'boxsets' || 'homevideos' || 'musicvideos' => true,
+        _ => v.collectionType == null,
+      };
+
+  void _requestViews(AppServices s) {
+    if (_viewsRequested) return;
+    _viewsRequested = true;
+    s.catalog.views().then((views) {
+      if (!mounted) return;
+      setState(() {
+        _views = views;
+        _rows = _buildLibraryRows(_services ?? s);
+        _data.clear();
+        _resolved.clear();
+        _allowFirstRows();
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _pump());
+    }).catchError((Object e) {
+      debugPrint('[home] library views: $e');
+    });
+  }
+
+  List<_Row> _buildThemeRows(AppServices s) {
     final c = s.catalog;
     final seerr = s.seerr;
     final r = s.recommender;
@@ -524,6 +613,9 @@ class _HomePageState extends State<HomePage> {
 
   /// A card was hovered or focused: show that resource and park the carousel.
   void _focusData(Object data, {bool immediate = false}) {
+    // The library home has no poster to pin; its rows also carry bare library
+    // folders, which the hero cannot describe.
+    if (_libraryLayout) return;
     if (_pinned && identical(_pinnedItem, data)) return;
     _slideTimer?.cancel();
     _pinned = true;
@@ -536,7 +628,7 @@ class _HomePageState extends State<HomePage> {
   /// once so every visit starts on a different resource. Called after each row
   /// resolves: the first two items are enough, later rows are ignored.
   void _startCarousel() {
-    if (!mounted) return;
+    if (!mounted || _libraryLayout) return;
     if (_slides != null) return;
     final rows = _rows;
     if (rows == null) return;
@@ -610,6 +702,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_libraryLayout) return _buildLibraryHome(context);
     final rows = _rows!;
     final size = MediaQuery.sizeOf(context);
     // Same stage as the fnOS home: a full-bleed 16:9 poster pinned to the top,
@@ -686,25 +779,56 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
-        if (_showLoader && AppServicesScope.of(context).isSignedIn)
-          Positioned.fill(
-            child: IgnorePointer(
-              ignoring: _loaded,
-              child: AnimatedOpacity(
-                opacity: _loaded ? 0 : 1,
-                duration: const Duration(milliseconds: 900),
-                curve: Curves.easeInOut,
-                onEnd: () {
-                  if (_loaded && mounted) setState(() => _showLoader = false);
-                },
-                child: const CinemaLoader(),
-              ),
-            ),
-          ),
+        _firstLoadOverlay(context),
       ]),
     );
   }
 
+  /// The library home: a plain stack of rows under the header, exactly like the
+  /// web client draws it, with no poster behind them.
+  Widget _buildLibraryHome(BuildContext context) {
+    final rows = _rows!;
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      child: Stack(children: [
+        Positioned.fill(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (n) {
+              _lastScrollMs = DateTime.now().millisecondsSinceEpoch;
+              return false;
+            },
+            child: RowsScrollView(
+              controller: _scroll,
+              top: _libraryHomeTop,
+              children: [for (final (i, row) in rows.indexed) _buildRow(row, first: i == 0)],
+            ),
+          ),
+        ),
+        _firstLoadOverlay(context),
+      ]),
+    );
+  }
+
+  /// First-load veil, shared by both layouts: without it the page flashes an
+  /// empty stack of rows before the server answers.
+  Widget _firstLoadOverlay(BuildContext context) {
+    if (!_showLoader || !AppServicesScope.of(context).isSignedIn) return const SizedBox.shrink();
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: _loaded,
+        child: AnimatedOpacity(
+          opacity: _loaded ? 0 : 1,
+          duration: const Duration(milliseconds: 900),
+          curve: Curves.easeInOut,
+          onEnd: () {
+            if (_loaded && mounted) setState(() => _showLoader = false);
+          },
+          child: const CinemaLoader(),
+        ),
+      ),
+    );
+  }
   /// Height taken by the first row that actually renders: its title plus the
   /// card block. The rows start exactly that far from the bottom edge, so the
   /// very first row is always fully visible instead of being clipped.
@@ -721,7 +845,7 @@ class _HomePageState extends State<HomePage> {
     if (first == null) return 0;
     final areaH = switch (first.kind) {
       _Kind.collections => 560 * 0.42 + 44,
-      _Kind.continueWatching => cardAreaHeight(CardStyle.landscape),
+      _Kind.continueWatching || _Kind.myMedia => cardAreaHeight(CardStyle.landscape),
       _ => cardAreaHeight(first.style),
     };
     return _rowTitleH + areaH + Zs.rowGap;
@@ -979,7 +1103,7 @@ class _HomePageState extends State<HomePage> {
       builder: (context, snap) {
         final (cardW, areaH) = switch (row.kind) {
           _Kind.collections => (560.0, 560 * 0.42 + 44),
-          _Kind.continueWatching => (Zs.landscapeWidth, cardAreaHeight(CardStyle.landscape)),
+          _Kind.continueWatching || _Kind.myMedia => (Zs.landscapeWidth, cardAreaHeight(CardStyle.landscape)),
           _ => (cardWidth(row.style), cardAreaHeight(row.style)),
         };
         if (snap.data == null && !snap.hasError) {
@@ -1021,6 +1145,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _card(_Row row, Object data, {required int rank, required bool autofocus}) {
+    if (row.kind == _Kind.myMedia && data is LibraryView) {
+      return _LibraryCard(view: data, autofocus: autofocus, onFocus: () => _focusKey(data), onSelect: () => openLibrary(context, data));
+    }
     if (row.kind == _Kind.collections && data is EmbyItem) {
       return CollectionCard(item: data, autofocus: autofocus, onFocus: () => _focusKey(data), onSelect: () => openItem(context, data));
     }
@@ -1058,6 +1185,78 @@ class _HomePageState extends State<HomePage> {
     }
     return mixedCard(context, data, style: row.style, rank: rank, autofocus: autofocus, onFocus: () => _focusKey(data));
   }
+}
+
+/// A "My Media" tile: the library's own artwork with its name on a scrim, the
+/// way the web client draws the folder shortcuts on its home screen.
+class _LibraryCard extends StatelessWidget {
+  const _LibraryCard({required this.view, this.autofocus = false, this.onFocus, this.onSelect});
+
+  final LibraryView view;
+  final bool autofocus;
+  final VoidCallback? onFocus;
+  final VoidCallback? onSelect;
+
+  static const _width = Zs.landscapeWidth;
+  static const _height = _width * 9 / 16;
+
+  @override
+  Widget build(BuildContext context) {
+    final catalog = AppServicesScope.read(context).catalog;
+    return TvFocusable(
+      autofocus: autofocus,
+      onSelect: onSelect,
+      onFocusChange: (f) => f ? onFocus?.call() : null,
+      builder: (context, focused) => SizedBox(
+        width: _width,
+        child: FocusFrame(
+          focused: focused,
+          child: SizedBox(
+            width: _width,
+            height: _height,
+            child: Stack(fit: StackFit.expand, children: [
+              NetImage(
+                url: catalog.image(view.id, ImageKind.primary, tag: view.imageTag, width: (_width * 1.6).round()),
+                width: _width,
+                height: _height,
+                fallback: TitleArt(title: view.name, icon: _icon(view)),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(18, 30, 18, 14),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [Color(0xE6000000), Color(0x00000000)],
+                    ),
+                  ),
+                  child: Text(
+                    view.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Zt.title.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static IconData _icon(LibraryView view) => switch (view.collectionType) {
+        'tvshows' => Icons.tv_rounded,
+        'movies' => Icons.movie_outlined,
+        'boxsets' => Icons.collections_bookmark_outlined,
+        'musicvideos' => Icons.music_video_outlined,
+        'homevideos' => Icons.videocam_outlined,
+        _ => Icons.video_library_outlined,
+      };
 }
 
 /// Circular prev/next control of the hero. Mouse only: the D-pad switches what

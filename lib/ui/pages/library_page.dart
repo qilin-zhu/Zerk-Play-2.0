@@ -47,9 +47,20 @@ enum _Sort {
 enum _Watched { all, unwatched, watched, favorites }
 
 class LibraryPage extends StatefulWidget {
-  const LibraryPage({super.key, required this.kind});
+  const LibraryPage({super.key, required this.kind, this.parentId, this.title, this.collectionType});
 
   final LibraryKind kind;
+
+  /// Set when the page is opened from a "My Media" tile on the home screen: the
+  /// grid is scoped to that one library instead of the whole server.
+  final String? parentId;
+
+  /// Keeps the name the server gave the library in the header.
+  final String? title;
+
+  /// `movies` / `tvshows` / … of a scoped library, so the types can be narrowed
+  /// the same way the tabs do it.
+  final String? collectionType;
 
   @override
   State<LibraryPage> createState() => _LibraryPageState();
@@ -69,17 +80,24 @@ class _LibraryPageState extends State<LibraryPage> {
   int _generation = 0;
   final _grid = RevealController(margin: 120);
 
-  List<String> get _types => switch (widget.kind) {
-        LibraryKind.movies => const ['Movie'],
-        LibraryKind.shows => const ['Series'],
-        LibraryKind.favorites => const ['Movie', 'Series'],
-      };
+  List<String>? get _types => widget.parentId != null
+      ? switch (widget.collectionType) {
+          'movies' => const ['Movie'],
+          'tvshows' => const ['Series'],
+          // A mixed / unknown library: let the server decide.
+          _ => null,
+        }
+      : switch (widget.kind) {
+          LibraryKind.movies => const ['Movie'],
+          LibraryKind.shows => const ['Series'],
+          LibraryKind.favorites => const ['Movie', 'Series'],
+        };
 
   @override
   void initState() {
     super.initState();
     _reload();
-    AppServicesScope.read(context).catalog.genres(types: _types).then((g) {
+    AppServicesScope.read(context).catalog.genres(types: _types, parentId: widget.parentId).then((g) {
       if (mounted) setState(() => _genres = g);
     }).catchError((_) {});
   }
@@ -108,6 +126,7 @@ class _LibraryPageState extends State<LibraryPage> {
     if (_grouped(settings)) return _loadGrouped(generation);
     try {
       final page = await AppServicesScope.read(context).catalog.query(
+            parentId: widget.parentId,
             collapseBoxSets: _grouped(settings),
             types: _types,
             sortBy: _sort.field,
@@ -147,6 +166,7 @@ class _LibraryPageState extends State<LibraryPage> {
   Future<void> _loadGrouped(int generation) async {
     try {
       final page = await AppServicesScope.read(context).catalog.query(
+            parentId: widget.parentId,
             types: _types,
             sortBy: 'SortName',
             limit: 5000,
@@ -221,7 +241,11 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   bool _grouped(AppSettings settings) =>
-      widget.kind == LibraryKind.movies && settings.groupCollections && _genre == null && _watched == _Watched.all;
+      widget.kind == LibraryKind.movies &&
+      widget.parentId == null &&
+      settings.groupCollections &&
+      _genre == null &&
+      _watched == _Watched.all;
 
   Future<void> _toggleGrouping(AppServices services) async {
     await services.updateSettings(services.settings.copyWith(groupCollections: !services.settings.groupCollections));
@@ -287,11 +311,12 @@ class _LibraryPageState extends State<LibraryPage> {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    final title = switch (widget.kind) {
-      LibraryKind.movies => l10n.movies,
-      LibraryKind.shows => l10n.shows,
-      LibraryKind.favorites => l10n.favorites,
-    };
+    final title = widget.title ??
+        switch (widget.kind) {
+          LibraryKind.movies => l10n.movies,
+          LibraryKind.shows => l10n.shows,
+          LibraryKind.favorites => l10n.favorites,
+        };
     final services = AppServicesScope.of(context);
     final view = services.settings.libraryView;
     final columns = switch (view) {
@@ -340,7 +365,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 }, _watched, (v) => _watched = v),
               ),
               ],
-              if (widget.kind == LibraryKind.movies) ...[
+              if (widget.kind == LibraryKind.movies && widget.parentId == null) ...[
                 const SizedBox(width: 14),
                 TvButton(
                   label: l10n.groupCollections,

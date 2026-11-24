@@ -1,7 +1,7 @@
 name: zerk_play
 description: Emby / Jellyfin client with *seerr requests.
 publish_to: 'none'
-version: 2.10.17+40
+version: 2.10.18+41
 
 environment:
   sdk: ^3.13.0

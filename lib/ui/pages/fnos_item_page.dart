@@ -109,8 +109,7 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
       });
       _focusPlay();
 
-      // Cast and stream details load in the background; failures stay silent.
-      unawaited(_loadPersons());
+      // Stream details load in the background; failures stay silent.
       if (type == 'movie' || type == 'video' || type == 'episode') {
         unawaited(_loadStreams());
       }
@@ -127,6 +126,9 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
           await _loadEpisodes(widget.guid);
         }
       }
+      // After the season/episode lists: a show only carries its cast on the
+      // episodes below it, so those guids have to be known first.
+      if (mounted) unawaited(_loadPersons());
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -150,11 +152,11 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
 
   /// Cast of the item.
   ///
-  /// trimemedia files the people with the title, not with the episode: asking
-  /// `person/list` for an episode guid answers with an empty list (or with the
-  /// names but no head shots), which is why an episode page used to have no
-  /// cast row at all. The season and the show are asked in turn and the first
-  /// answer that actually carries pictures wins.
+  /// trimemedia files the people with what was imported: a movie carries its
+  /// own cast, but a show usually carries none and every episode under it has
+  /// the same list. So the item is asked first, then the show, the season, and
+  /// finally the episodes - whichever answer actually has head shots wins, and
+  /// the first non-empty one is kept as a fallback.
   Future<void> _loadPersons() async {
     final client = _client;
     if (client == null) return;
@@ -165,16 +167,23 @@ class _FnOsItemPageState extends State<FnOsItemPage> {
       _s(detail, 'ancestor_guid'),
       _s(detail, 'parent_guid'),
       widget.seed?.parentGuid,
-    ].whereType<String>().where((g) => g.isNotEmpty && seen.add(g)).toList();
+      for (final season in _seasons) _guid(season),
+      for (final episode in _episodes) _guid(episode),
+    ].whereType<String>().where((g) => g.isNotEmpty && seen.add(g)).take(12).toList();
     var chosen = const <Map<String, Object?>>[];
+    var from = '';
     for (final guid in candidates) {
       final list = await _personsOf(client, guid);
       if (list.isEmpty) continue;
       final withPhotos = list.any((p) => _s(p, 'profile_path') != null);
-      if (chosen.isEmpty || withPhotos) chosen = list;
+      if (chosen.isEmpty || withPhotos) {
+        chosen = list;
+        from = guid;
+      }
       if (withPhotos) break;
     }
     if (!mounted || chosen.isEmpty) return;
+    debugPrint('[fnos] persons: ${chosen.length} from $from');
     setState(() => _persons = chosen);
   }
 

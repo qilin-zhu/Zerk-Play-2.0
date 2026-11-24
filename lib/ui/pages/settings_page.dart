@@ -7,6 +7,7 @@ import '../../app/app_services.dart';
 import '../../app/app_settings.dart';
 import '../../app/hub_link.dart';
 import '../../app/release.dart';
+import '../../core/emby/server_kind.dart';
 import '../../core/host.dart';
 import '../../core/log/app_log.dart';
 import '../../core/windows/native_window.dart';
@@ -544,6 +545,15 @@ class _SettingsPageState extends State<SettingsPage> {
               title: l10n.startFullScreen,
               value: app.startFullScreen,
               onChanged: (v) => services.updateSettings(app.copyWith(startFullScreen: v)),
+            ),
+          // Only the Emby / Jellyfin home has the two layouts; a fnOS session
+          // builds its rows straight from the server's libraries.
+          if (services.janus.session.kind != ServerKind.fnos)
+            SettingToggleRow(
+              title: l10n.homeRecommendTheme,
+              subtitle: l10n.homeRecommendThemeHint,
+              value: app.homeRecommendationTheme,
+              onChanged: (v) => services.updateSettings(app.copyWith(homeRecommendationTheme: v)),
             ),
           SettingToggleRow(title: l10n.navigationSounds, value: app.sounds, onChanged: (v) => services.updateSettings(app.copyWith(sounds: v))),
           SettingHeader(l10n.settingsGroupLayout),

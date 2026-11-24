@@ -600,6 +600,15 @@
   "@episodesDescending": {
     "description": "Episode order toggle on a season row, currently …3, 2, 1"
   },
+  "homeRecommendTheme": "Home recommendation theme",
+  "@homeRecommendTheme": {
+    "description": "Settings switch: the Emby / Jellyfin home shows a poster carousel and taste-based rows instead of the library layout"
+  },
+  "homeRecommendThemeHint": "Off keeps the library layout: continue watching first, then My Media, then the latest from each library. On replaces it with the poster carousel and rows picked from what you watch.",
+  "myMedia": "My Media",
+  "@myMedia": {
+    "description": "Row title above the library shortcuts on the home page"
+  },
   "moreLikeThis": "More like this",
   "couldNotLoadTitle": "Could not load this title",
   "tryAgain": "Try again",

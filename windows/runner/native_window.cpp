@@ -84,12 +84,7 @@ NativeWindow::NativeWindow(HWND window, flutter::BinaryMessenger* messenger) : w
   channel_->SetMethodCallHandler([this](const auto& call, auto result) {
     const auto& method = call.method_name();
     const auto* arg = std::get_if<bool>(call.arguments());
-    if (method == "isFullScreen") {
-      result->Success(flutter::EncodableValue(fullscreen_));
-    } else if (method == "setFullScreen" && arg) {
-      SetFullScreen(*arg);
-      result->Success();
-    } else if (method == "hdrStatus") {
+    if (method == "hdrStatus") {
       const auto status = GetHdrStatus();
       result->Success(flutter::EncodableValue(flutter::EncodableMap{
           {flutter::EncodableValue("supported"), flutter::EncodableValue(status.supported)},
@@ -124,27 +119,6 @@ NativeWindow::~NativeWindow() {
       DisplayConfigSetDeviceInfo(&state.header);
     }
   }).detach();
-}
-
-void NativeWindow::SetFullScreen(bool fullscreen) {
-  if (fullscreen == fullscreen_) return;
-  if (fullscreen) {
-    MONITORINFO mi = {sizeof(mi)};
-    if (!GetMonitorInfo(MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST), &mi)) return;
-    saved_placement_.length = sizeof(saved_placement_);
-    GetWindowPlacement(window_, &saved_placement_);
-    saved_style_ = GetWindowLongPtr(window_, GWL_STYLE);
-    SetWindowLongPtr(window_, GWL_STYLE, saved_style_ & ~(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE));
-    const RECT& rc = mi.rcMonitor;
-    SetWindowPos(window_, HWND_TOP, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
-                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-  } else {
-    SetWindowLongPtr(window_, GWL_STYLE, (saved_style_ | WS_OVERLAPPEDWINDOW) & ~WS_MAXIMIZE);
-    SetWindowPlacement(window_, &saved_placement_);
-    SetWindowPos(window_, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-  }
-  fullscreen_ = fullscreen;
 }
 
 NativeWindow::HdrStatus NativeWindow::GetHdrStatus() const {

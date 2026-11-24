@@ -13,11 +13,7 @@ class NativeWindow {
 
   ~NativeWindow();
 
-  bool fullscreen() const { return fullscreen_; }
-
  private:
-  void SetFullScreen(bool fullscreen);
-
   struct HdrStatus {
     bool supported = false;
     bool enabled = false;
@@ -25,10 +21,11 @@ class NativeWindow {
   HdrStatus GetHdrStatus() const;
   bool SetHdr(bool enabled);
 
+  // Full screen is not implemented here: window_manager owns it on the Dart
+  // side (see NativeWindow.setFullScreen), because the frameless hidden title
+  // bar it installs needs its own full-screen flag to drop the 8 px resize
+  // border. This class only carries the HDR switch.
   HWND window_;
-  bool fullscreen_ = false;
-  LONG_PTR saved_style_ = 0;
-  WINDOWPLACEMENT saved_placement_ = {sizeof(WINDOWPLACEMENT)};
   bool hdr_enabled_by_app_ = false;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
 };

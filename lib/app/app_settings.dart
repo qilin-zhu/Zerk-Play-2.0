@@ -87,6 +87,7 @@ final class AppSettings {
     this.cardTrailers = true,
     this.updateMirrorUrl = '',
     this.episodesDescending = false,
+    this.homeRecommendationTheme = false,
   });
 
   final String seerrUrl;
@@ -141,6 +142,13 @@ final class AppSettings {
   /// otherwise, which means a lot of scrolling on a remote.
   final bool episodesDescending;
 
+  /// Emby / Jellyfin home: the recommendation theme (a full-bleed poster
+  /// carousel over taste-based rows) when true, the plain library layout of the
+  /// Emby web client - continue watching, then My Media, then one row per
+  /// library - when false. Off by default: the library layout is the one that
+  /// shows what the server actually holds.
+  final bool homeRecommendationTheme;
+
   List<(String, String)> homeCollectionsOf(String userId) => homeCollections[userId] ?? const [];
 
   AppSettings withHomeCollections(String userId, List<(String, String)> picked) =>
@@ -192,6 +200,7 @@ final class AppSettings {
     bool? cardTrailers,
     String? updateMirrorUrl,
     bool? episodesDescending,
+    bool? homeRecommendationTheme,
   }) =>
       AppSettings(
         seerrUrl: seerrUrl ?? this.seerrUrl,
@@ -222,6 +231,7 @@ final class AppSettings {
         cardTrailers: cardTrailers ?? this.cardTrailers,
         updateMirrorUrl: updateMirrorUrl ?? this.updateMirrorUrl,
         episodesDescending: episodesDescending ?? this.episodesDescending,
+        homeRecommendationTheme: homeRecommendationTheme ?? this.homeRecommendationTheme,
       );
 
   static Future<bool> exist() async => (await SharedPreferences.getInstance()).containsKey(_key);
@@ -274,6 +284,7 @@ final class AppSettings {
         cardTrailers: Host.isAndroid && j['cardTrailersV'] != 2 ? false : j['cardTrailers'] as bool? ?? !Host.isAndroid,
         updateMirrorUrl: j['updateMirror'] as String? ?? '',
         episodesDescending: j['episodesDescending'] as bool? ?? false,
+        homeRecommendationTheme: j['homeRecommendTheme'] as bool? ?? false,
       );
     } catch (_) {
       return AppSettings(cardTrailers: !Host.isAndroid);
@@ -316,6 +327,7 @@ final class AppSettings {
         'cardTrailersV': 2,
         'updateMirror': updateMirrorUrl,
         'episodesDescending': episodesDescending,
+        'homeRecommendTheme': homeRecommendationTheme,
       }),
     );
   }
