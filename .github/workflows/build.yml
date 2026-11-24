@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.18'
+  APP_VERSION: '2.10.19'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -334,4 +334,10 @@ jobs:
 
             **Emby / Jellyfin 首页新增「影视库」布局（默认）**
             设置 → 界面 多了一个开关「首页推荐影视主题」，默认关闭。关闭时首页就是 Emby 网页版的样子：第一行继续观看，第二行我的媒体（每个媒体库一块封面，点进去是这个库的网格），后面每个库一行最新内容。想要原来的海报轮播加按口味排的推荐行，把开关打开就行。飞牛影视的首页不走这套，没有这个开关。
+
+            **影视库首页不再黑屏**
+            上一版切到影视库首页时，会把服务器上每个媒体库的最新内容一次性全要下来。库多的账号（十几个库）等于同时发十几条请求，最慢的一条要等九秒，服务器顶不住就直接断开连接，整页几乎什么都没有，只剩侧边栏。现在按屏幕看到的顺序排队加载，最多同时三条；某一条被服务器断开也不会拖累别的行。「继续观看」的两个请求也拆成各自独立，一个失败另一个照常显示。真的什么都没拿到时，页面会给一行提示和「重试」按钮，不会再是一片黑。
+
+            **设置里去掉开关下面的说明文字**
+            「首页推荐影视主题」下面那段小字删掉了，只留标题。
 

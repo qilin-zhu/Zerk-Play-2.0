@@ -50,7 +50,8 @@ enum _Kind {
 }
 
 class _Row {
-  _Row(this.title, this.load, {this.style = CardStyle.poster, this.kind = _Kind.cards, this.recommends = true});
+  _Row(this.title, this.load,
+      {this.style = CardStyle.poster, this.kind = _Kind.cards, this.recommends = true, this.height = 0});
 
   String Function(L10n) title;
 
@@ -59,6 +60,11 @@ class _Row {
   final _Kind kind;
 
   final bool recommends;
+
+  /// Rendered height of the whole row, title included. Only the library home
+  /// uses it: its rows differ a lot in height, so the loader walks the list by
+  /// accumulated height instead of the fixed 320 px estimate.
+  final double height;
 }
 
 class HomePage extends StatefulWidget {
@@ -159,6 +165,12 @@ class _HomePageState extends State<HomePage> {
   List<LibraryView>? _views;
   bool _viewsRequested = false;
 
+  /// The continue-watching row of the library layout. Reused for the life of
+  /// the page so the views round-trip cannot trigger a second request.
+  _Row? _continueRow;
+
+  bool _libraryLogged = false;
+
   _Row? _myListRow;
   String _myListKeys = '';
 
@@ -199,6 +211,7 @@ class _HomePageState extends State<HomePage> {
       _rows = _buildRows(s);
       _data.clear();
       _resolved.clear();
+      _libraryLogged = false;
       _allowFirstRows();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _pump());
@@ -214,16 +227,20 @@ class _HomePageState extends State<HomePage> {
 
   void _allowFirstRows() {
     _allowed.clear();
-    // The library home is short (a handful of rows) and every row is visible
-    // almost at once, so they are all allowed immediately.
     if (_libraryLayout) {
-      _allowed.addAll(_rows!);
+      // Opening every library at once is what took the home page down: a
+      // fourteen-library account fires fourteen `Items/Latest` calls in the
+      // same frame, the slowest ones sit for nine seconds and the server drops
+      // the connections, leaving the page almost empty. Only what the first
+      // screen shows starts here; [_pumpLibrary] walks the rest three at a time.
+      _allowed.addAll(_rows!.take(_parallelRows));
       return;
     }
     _allowed.addAll(_rows!.take(6).where((r) => !r.recommends && r.kind != _Kind.moods));
   }
 
   void _pump({int upTo = -1}) {
+    if (_libraryLayout) return _pumpLibrary();
     final rows = _rows!;
     var changed = false;
     for (var i = 0; i < rows.length && i <= upTo; i++) {
@@ -242,7 +259,39 @@ class _HomePageState extends State<HomePage> {
     if (changed && mounted) setState(() {});
   }
 
+  /// Library home loader: walks the rows by accumulated height and starts the
+  /// ones the viewport is about to show, never more than [_parallelRows] at a
+  /// time. Each finished row lands back here through [_load], so the rest of
+  /// the list follows on its own.
+  void _pumpLibrary() {
+    if (!_loaded || !mounted) return;
+    final rows = _rows!;
+    final viewport = _scroll.hasClients ? _scroll.position.viewportDimension : MediaQuery.sizeOf(context).height;
+    final offset = _scroll.hasClients ? _scroll.offset : 0.0;
+    final bottom = offset + viewport * 1.4;
+    var y = _libraryHomeTop;
+    var changed = false;
+    for (final row in rows) {
+      if (y > bottom) break;
+      if (!_allowed.contains(row)) {
+        if (_loading >= _parallelRows) break;
+        _allowed.add(row);
+        changed = true;
+        if (!_data.containsKey(row)) _loading++;
+        _load(row, counted: true);
+      }
+      y += row.height;
+    }
+    if (changed) setState(() {});
+  }
+
   void _onScroll() {
+    if (_libraryLayout) {
+      // Row heights swing between poster and landscape, so the fixed 320 px
+      // step of the theme home does not apply; the loader keeps its own cap.
+      if (_rows!.any((r) => !_allowed.contains(r))) _pump();
+      return;
+    }
     final offset = _scroll.hasClients ? _scroll.offset : 0.0;
     final upTo = (offset + MediaQuery.sizeOf(context).height * 2) ~/ 320;
     if (upTo >= 0 && _rows!.take(upTo + 1).any((r) => !_allowed.contains(r))) _pump(upTo: upTo);
@@ -368,10 +417,21 @@ class _HomePageState extends State<HomePage> {
       for (final v in _views ?? const <LibraryView>[])
         if (_isMediaLibrary(v)) v,
     ];
+    // Kept across the views round-trip: replacing this row would drop the
+    // answer already on its way and ask the server a second time (a fresh
+    // start shows exactly that duplicate Resume + NextUp pair in the log).
+    final continueRow = _continueRow ??= _Row(
+      (l) => l.continueWatching,
+      () => c.continueWatching(),
+      kind: _Kind.continueWatching,
+      recommends: false,
+      height: _rowHeightOf(_Kind.continueWatching, CardStyle.landscape),
+    );
     return [
-      _Row((l) => l.continueWatching, () => c.continueWatching(), kind: _Kind.continueWatching, recommends: false),
+      continueRow,
       if (libraries.isNotEmpty)
-        _Row((l) => l.myMedia, () async => List<Object>.of(libraries), kind: _Kind.myMedia, recommends: false),
+        _Row((l) => l.myMedia, () async => List<Object>.of(libraries),
+            kind: _Kind.myMedia, recommends: false, height: _rowHeightOf(_Kind.myMedia, CardStyle.landscape)),
       for (final view in libraries)
         _Row(
           (_) => view.name,
@@ -379,8 +439,21 @@ class _HomePageState extends State<HomePage> {
           kind: _Kind.library,
           style: view.collectionType == 'tvshows' ? CardStyle.landscape : CardStyle.poster,
           recommends: false,
+          height: _rowHeightOf(
+              _Kind.library, view.collectionType == 'tvshows' ? CardStyle.landscape : CardStyle.poster),
         ),
     ];
+  }
+
+  /// Height a row takes when it renders: its title block, the card area and the
+  /// gap to the next row. Mirrors the sizes [_buildRow] hands to [MediaRow].
+  static double _rowHeightOf(_Kind kind, CardStyle style) {
+    final area = switch (kind) {
+      _Kind.continueWatching || _Kind.myMedia => cardAreaHeight(CardStyle.landscape),
+      _Kind.collections => 560 * 0.42 + 44,
+      _ => cardAreaHeight(style),
+    };
+    return _rowTitleH + area + Zs.rowGap;
   }
 
   /// Only the libraries this player can actually show: music / books shelves
@@ -396,17 +469,35 @@ class _HomePageState extends State<HomePage> {
     _viewsRequested = true;
     s.catalog.views().then((views) {
       if (!mounted) return;
+      AppLog.write('[home] library views: ${views.length} (${[for (final v in views) v.name].join(', ')})');
+      // The row caches stay: continue watching is the same [_Row] instance and
+      // its answer is either here already or on its way.
       setState(() {
         _views = views;
         _rows = _buildLibraryRows(_services ?? s);
-        _data.clear();
-        _resolved.clear();
         _allowFirstRows();
       });
       WidgetsBinding.instance.addPostFrameCallback((_) => _pump());
     }).catchError((Object e) {
-      debugPrint('[home] library views: $e');
+      AppLog.write('[home] library views failed: $e');
+      if (!mounted) return;
+      setState(() => _views = const []);
     });
+  }
+
+  /// Retry of the empty state: forget the library list and ask again.
+  void _retryLibrary() {
+    final s = _services;
+    if (s == null) return;
+    _viewsRequested = false;
+    _views = null;
+    _data.clear();
+    _resolved.clear();
+    setState(() {
+      _rows = _buildLibraryRows(s);
+      _allowFirstRows();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _pump());
   }
 
   List<_Row> _buildThemeRows(AppServices s) {
@@ -593,8 +684,16 @@ class _HomePageState extends State<HomePage> {
           _resolved[row] = items;
           _startCarousel();
           return items;
+        } catch (e) {
+          // Marked as resolved-empty as well: a row that stays out of the map
+          // looks like it is still loading, so the empty state never kicks in
+          // and a server that drops every call leaves a black page.
+          _resolved[row] = const [];
+          rethrow;
         } finally {
-          _loading--;
+          // Guarded: a row from a batch that has already been cleared can come
+          // back after the counter was reset, and must not drive it negative.
+          if (_loading > 0) _loading--;
           scheduleMicrotask(() => mounted ? _pump() : null);
         }
       });
@@ -787,10 +886,18 @@ class _HomePageState extends State<HomePage> {
   /// The library home: a plain stack of rows under the header, exactly like the
   /// web client draws it, with no poster behind them.
   Widget _buildLibraryHome(BuildContext context) {
-    final rows = _rows!;
-    return Focus(
-      canRequestFocus: false,
-      skipTraversal: true,
+    final rows = _rows ?? const <_Row>[];
+    final size = MediaQuery.sizeOf(context);
+    if (!_libraryLogged) {
+      _libraryLogged = true;
+      debugPrint('[home] library home: ${rows.length} rows, ${_views?.length ?? -1} views, '
+          '${_allowed.length} allowed');
+    }
+    return ColoredBox(
+      // The theme home paints a full-bleed poster behind its rows; this one has
+      // nothing behind them, so it paints its own background. Without it a page
+      // whose rows are still loading reads as a black window.
+      color: Zc.background,
       child: Stack(children: [
         Positioned.fill(
           child: NotificationListener<ScrollNotification>(
@@ -798,36 +905,61 @@ class _HomePageState extends State<HomePage> {
               _lastScrollMs = DateTime.now().millisecondsSinceEpoch;
               return false;
             },
-            child: RowsScrollView(
+            child: ListView.builder(
               controller: _scroll,
-              top: _libraryHomeTop,
-              children: [for (final (i, row) in rows.indexed) _buildRow(row, first: i == 0)],
+              // Rows differ a lot in height (landscape rows are 406 px, poster
+              // rows 492 px) and a big account is ~8000 px of column, so they
+              // are built lazily instead of being laid out all at once.
+              padding: EdgeInsets.only(top: _libraryHomeTop, bottom: size.height * 0.5),
+              itemCount: rows.length,
+              itemBuilder: (context, i) => _buildRow(rows[i], first: i == 0),
             ),
           ),
         ),
+        // Only once the library list is known: before that the page is simply
+        // still loading, and the skeleton rows say so.
+        if (_loaded && _views != null && (rows.isEmpty || _libraryIsEmpty(rows)))
+          Positioned.fill(child: _libraryEmpty(context)),
         _firstLoadOverlay(context),
+      ]),
+    );
+  }
+
+  /// Every row is back and none of them has anything: the server dropped the
+  /// calls, or the account really has no media. Either way the page must not
+  /// stay a bare black sheet, so the empty state takes over.
+  bool _libraryIsEmpty(List<_Row> rows) {
+    for (final row in rows) {
+      final items = _resolved[row];
+      if (items == null || items.isNotEmpty) return false;
+    }
+    return true;
+  }
+
+  Widget _libraryEmpty(BuildContext context) {
+    final l10n = context.l10n;
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Text(l10n.homeEmpty, style: Zt.caption.copyWith(color: Zc.textMuted)),
+        const SizedBox(height: 24),
+        TvButton(label: l10n.tryAgain, icon: Icons.refresh_rounded, onSelect: _retryLibrary),
       ]),
     );
   }
 
   /// First-load veil, shared by both layouts: without it the page flashes an
   /// empty stack of rows before the server answers.
+  ///
+  /// It leaves the tree the moment the rows are in instead of fading out. A
+  /// loader kept around at zero opacity goes on ticking and repainting the
+  /// whole window, and if that fade ever fails to report back it stays on top
+  /// of the page for good - which is exactly the "shows the page, then all
+  /// black" report this exists to rule out.
   Widget _firstLoadOverlay(BuildContext context) {
-    if (!_showLoader || !AppServicesScope.of(context).isSignedIn) return const SizedBox.shrink();
-    return Positioned.fill(
-      child: IgnorePointer(
-        ignoring: _loaded,
-        child: AnimatedOpacity(
-          opacity: _loaded ? 0 : 1,
-          duration: const Duration(milliseconds: 900),
-          curve: Curves.easeInOut,
-          onEnd: () {
-            if (_loaded && mounted) setState(() => _showLoader = false);
-          },
-          child: const CinemaLoader(),
-        ),
-      ),
-    );
+    if (!_showLoader || _loaded || !AppServicesScope.of(context).isSignedIn) {
+      return const SizedBox.shrink();
+    }
+    return const Positioned.fill(child: IgnorePointer(child: CinemaLoader()));
   }
   /// Height taken by the first row that actually renders: its title plus the
   /// card block. The rows start exactly that far from the bottom edge, so the

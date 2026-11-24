@@ -5,6 +5,16 @@ import '../services/janus/janus_service.dart';
 import 'collection_index.dart';
 import 'metadata_localizer.dart';
 
+extension on Future<List<EmbyItem>> {
+  /// Turns a failed half of "continue watching" into an empty list: whichever
+  /// of resume / next-up answers is still worth showing, and the log keeps the
+  /// reason the other one did not.
+  Future<List<EmbyItem>> half() => catchError((Object e) {
+        debugPrint('[emby] continue watching half failed: $e');
+        return const <EmbyItem>[];
+      });
+}
+
 final class LibraryView {
   const LibraryView({required this.id, required this.name, this.collectionType, this.imageTag});
 
@@ -77,7 +87,10 @@ final class CatalogApi {
       });
 
   Future<List<EmbyItem>> continueWatching({int limit = 24}) async {
-    final (inProgress, next) = await (resume(limit: limit), nextUp(limit: limit)).wait;
+    // Both halves are wanted, neither is required. A plain `(a, b).wait`
+    // throws ParallelWaitError as soon as one side fails, so a server dropping
+    // the NextUp connection used to blank the whole row.
+    final (inProgress, next) = await (resume(limit: limit).half(), nextUp(limit: limit).half()).wait;
     return mergeContinueWatching(inProgress, next);
   }
 

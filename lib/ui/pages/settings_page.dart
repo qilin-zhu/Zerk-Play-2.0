@@ -551,7 +551,6 @@ class _SettingsPageState extends State<SettingsPage> {
           if (services.janus.session.kind != ServerKind.fnos)
             SettingToggleRow(
               title: l10n.homeRecommendTheme,
-              subtitle: l10n.homeRecommendThemeHint,
               value: app.homeRecommendationTheme,
               onChanged: (v) => services.updateSettings(app.copyWith(homeRecommendationTheme: v)),
             ),
