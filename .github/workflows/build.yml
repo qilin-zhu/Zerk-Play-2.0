@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.24'
+  APP_VERSION: '2.10.25'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -381,4 +381,8 @@ jobs:
 
             **全屏时右上角的按钮和窗口模式一致了**
             上一版全屏时中间那个按钮是「退出全屏」的四角箭头，和窗口模式下的方框图标看起来像两套按钮。现在全屏和最大化共用同一个「还原」图标，点一下都回到窗口；拖动条仍然只在窗口模式下存在。
+
+            **海报、封面加载失败会自己重试了（文字卡片能变回图片）**
+            Emby 和飞牛影视的封面加载失败后，本来应该只是这一次失败，但它会把「不是图片的东西」写进本地图片缓存：飞牛的图片代理在还没拿到远端图时会先回一张 SVG 占位图，磁盘写满时留下的是一次 0 字节的文件，反向代理出错时回的是 XML。这些文件被当成缓存命中，每次解码都报 `Invalid image data`，于是那张海报从此永远是文字卡片 —— 重启、刷新都没用。
+            现在读缓存先验证文件头：空文件、SVG、XML、JSON 直接删掉并重新下载；写入只接受真正的图片，而且先写临时文件再改名，中途中断只会留下一个临时文件，不会污染原图。加载失败还会按 0.5 / 1 / 2 / 4 秒自动重试三次（重试时会绕过坏缓存），失败后不再继续轰炸服务器。启动时顺手清理一遍历史缓存里的坏文件，并把目录上限压到 320 MB（之前涨到了 557 MB）。
 

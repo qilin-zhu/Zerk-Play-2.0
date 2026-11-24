@@ -26,6 +26,7 @@ import 'ui/focus/focus_zone.dart';
 import 'ui/pages/onboarding_page.dart';
 import 'ui/pages/sign_in_page.dart';
 import 'ui/shell/shell.dart';
+import 'ui/widgets/image_disk_cache.dart';
 import 'ui/widgets/window_chrome.dart';
 import 'ui/theme/tokens.dart';
 
@@ -46,6 +47,7 @@ Future<void> main(List<String> args) async {
     });
   }
   unawaited(UiSounds.load());
+  unawaited(_pruneImageCache());
   Gamepad.start();
   SystemBack.install();
   SystemKeyboard.install();
@@ -61,6 +63,27 @@ Future<void> main(List<String> args) async {
       trailerSmoke: args.contains('--trailer-smoke'),
     ),
   ));
+}
+
+/// Image cache housekeeping, in the background: forgets entries that are not
+/// images (0-byte files left by an interrupted write, an XML/JSON error page, a
+/// placeholder SVG) and keeps the folder under [_imageCacheBudget].
+///
+/// A poisoned entry used to survive every restart: the file existed, so it
+/// counted as a cache hit, the decoder threw `Invalid image data`, and the card
+/// fell back to its title card for ever. That is the "posters turned into text
+/// and refresh does not help" report.
+Future<void> _pruneImageCache() async {
+  const budget = 320 << 20;
+  try {
+    final s = await pruneImageCache(maxBytes: budget);
+    if (s.removed > 0 || s.bytes > budget) {
+      AppLog.write('[image] cache pruned: removed=${s.removed} kept=${s.kept} '
+          '${(s.bytes / (1 << 20)).round()} MB');
+    }
+  } catch (e) {
+    AppLog.write('[image] cache prune failed: $e');
+  }
 }
 
 Future<void> _initWindow() async {
