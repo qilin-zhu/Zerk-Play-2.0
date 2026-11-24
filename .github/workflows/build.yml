@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.25'
+  APP_VERSION: '2.10.9'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -219,15 +219,10 @@ jobs:
       - name: List packages
         run: ls -lh dist
 
-      # Pre-2.10.1 clients look for fixed asset names (ZerkPlay-Public-*),
-      # which no release ever carried, so their update check always said
-      # "already up to date". Publishing these copies lets them finally see
-      # the 2.10.1 update; the fixed checker ignores them by prefix.
-      - name: Copy legacy-named assets for old clients
-        run: |
-          cp "dist/ZerkPlay-${APP_VERSION}-android.apk" "dist/ZerkPlay-Public-Android.apk"
-          cp "dist/ZerkPlay-${APP_VERSION}-setup.exe" "dist/ZerkPlay-Public-Windows-setup.exe"
-
+      # No legacy-named copies any more (ZerkPlay-Public-*). They existed only so
+      # clients at 2.10.0 and older - whose checker looked for fixed file names -
+      # could see an update at all. Those installs have had several releases to
+      # move, and every release since 2.10.1 ships one release and three files.
       - name: Publish to Releases
         uses: softprops/action-gh-release@v2
         with:
@@ -248,22 +243,40 @@ jobs:
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包，推荐 |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip` | 免安装，解压即用 |
             | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
-            | Windows x64 | `ZerkPlay-Public-Windows-setup.exe` | 旧版客户端（≤2.10.0）检查更新专用，与 setup.exe 内容相同 |
-            | Android | `ZerkPlay-Public-Android.apk` | 旧版客户端（≤2.10.0）检查更新专用，与 android.apk 内容相同 |
 
-            **更新检查修复**：2.10.0 及更早版本的客户端检查更新始终提示「已是最新版」，本版修复了版本比较逻辑，并通过兼容文件名让旧版客户端也能收到本次更新。
+            这一版自带三个安装包，不再另外提供兼容旧客户端的固定文件名副本（`ZerkPlay-Public-*`）。还在 2.10.0 及更早版本的设备，手动装一次本版即可，之后检查更新恢复正常。
 
-            **国内加速源**：设置 → 诊断 → 「更新使用国内加速源」，GitHub 直连失败的环境可走加速镜像检查和下载更新；直连失败时也会自动尝试镜像。
+            **飞牛影视的详情页和 Emby 完全一致**
+            以前飞牛的电影、剧集详情是另一套样子，现在和 Emby / Jellyfin 用同一套版式：全屏背景图缓慢缩放、标题和评分在一屏 20% 处、简介在右栏、下面一排按钮胶囊、剧集是 16:9 卡片行（带集号、播放进度、焦点放大）、演职人员圆形头像、底部技术信息。季多的剧集多一排季选择按钮。
 
-            **修复 Windows 更新卡死**：下载完安装包后应用退出卡在 HDR 恢复钩子里、安装器又反过来等应用退出。现在应用走窗口销毁的快速退出路径，安装器遇到占用会直接强制关闭应用。
+            **打开某一集，焦点就在这一集**
+            以前不管点的是第几集，进来焦点都在播放按钮、剧集行从第 1 集开始；现在会把剧集行滚到当前这一集。三个服务都是这样。
 
-            **退出更迅速**：点退出后窗口立即消失，HDR / 刷新率恢复改到后台线程，不再阻塞窗口关闭；更新退出走同一条快速路径。
+            **剧集行有排序按钮，排序后焦点回到当前集**
+            剧集行标题右边加了一个「正序 / 倒序」按钮，平时只显示图标，焦点移上去才展开文字，按一下整体反转并记住选择；反转后焦点仍然停在当前这一集。
 
-            **诊断页调整**：移除「把日志发送给开发者」；「详细播放器日志」默认关闭，需要排查播放问题时再手动打开。
+            **首页「继续观看」先进详情页**
+            点一下进入详情页而不是直接开播，播放按钮写「继续播放 · 剩余 xx」，旁边有「从头播放」；卡片聚焦时中间的播放圆钮才是直接开播。飞牛影视也支持从头播放。
 
-            Windows 端依赖 [libmpv](https://github.com/shinchiro/mpv-winbuild-cmake)，已经打包进安装目录，不用另外装。
+            **Emby / Jellyfin 首页可以选择布局**
+            设置 → 界面 有「首页推荐影视主题」开关，默认关闭。关闭是 Emby 网页版的样子：顶部海报轮播，第一行继续观看，第二行「我的媒体」（每个库一块封面，点进去是这个库的网格），从第三行起每个库一行最新内容、统一竖版封面。打开就是按口味排的推荐行。飞牛影视的首页不走这套。
 
-            安装包默认装到当前用户目录（不弹 UAC），勾选「创建桌面快捷方式」或从开始菜单启动。
+            **影视库首页不再黑屏，加载有动画**
+            一次把十几个库的最新内容全要下来会让服务器断连，现在按屏幕顺序排队、最多三条并发；某一行失败不影响其它行，全空时给提示和重试按钮。首屏加载时是那段胶片倒数动画，不再是干等一排灰块。
+
+            **全屏是真正的全屏**
+            启动全屏不再在左右和底部留缝，退出全屏不会卡住、也不会沉到桌面底下；右上角的最小化 / 还原 / 关闭在窗口和全屏下是同一套按钮。
+
+            **海报加载失败会自己重试**
+            以前图片代理返回的占位 SVG、磁盘写满留下的空文件会被当成缓存命中，那张封面从此永远是文字卡片，重启也没用。现在读缓存先验文件头，坏文件当场删掉重下；加载失败按 0.5 / 1 / 2 / 4 秒自动重试三次。
+
+            **出问题能看到原因**
+            界面构建异常会直接画在出错的那一块上并写进日志，日志改成了同步写，不会再出现「进程活着、日志 0 字节」。
+
+            **安卓签名统一**
+            测试包和正式版共用同一个签名证书，之后任意一版都能直接覆盖安装。
+
+            Windows 端依赖 [libmpv](https://github.com/shinchiro/mpv-winbuild-cmake)，已经打包进安装目录，不用另外装。安装包默认装到当前用户目录（不弹 UAC），勾选「创建桌面快捷方式」或从开始菜单启动。
 
   # Test builds are published as pre-releases so they stay out of
   # /releases/latest: the update checker keeps pointing at the last stable
