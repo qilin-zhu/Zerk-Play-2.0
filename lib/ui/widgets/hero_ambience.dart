@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
@@ -112,29 +113,44 @@ class _Blurred extends StatelessWidget {
   final Uri url;
   final Map<String, String>? headers;
 
+  /// The wash is built from a *tiny* copy of the artwork and blown up. Blurring
+  /// a page-sized layer in one pass is what used to leave a one-pixel bright
+  /// row: the blur surface gets split into tiles by the compositor, and the row
+  /// on a tile boundary samples the wrong pixels. At 180 px there is only one
+  /// tile, so there is nothing to split - and it costs a fraction of the GPU
+  /// time, which matters on the TV boxes this also runs on.
+  static const _base = 180.0;
+
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
-      child: ImageFiltered(
-        // Wide enough that no detail survives - only the colour survives - and
-        // cheap enough for a TV box: it is inside a RepaintBoundary and only
-        // repaints when the artwork changes.
-        imageFilter: ui.ImageFilter.blur(sigmaX: 26, sigmaY: 26, tileMode: TileMode.decal),
+    return LayoutBuilder(builder: (context, constraints) {
+      final w = constraints.maxWidth.isFinite ? constraints.maxWidth : _base;
+      final h = constraints.maxHeight.isFinite ? constraints.maxHeight : _base * 9 / 16;
+      final scale = max(w / _base, h / (_base * 9 / 16));
+      return ClipRect(
         child: Transform.scale(
-          // Overscan: a blur this wide pulls the artwork's own edges inward and
-          // would otherwise leave a dark vignette at the page edges.
-          scale: 1.24,
-          child: NetImage(
-            url: url,
-            headers: headers,
-            fit: BoxFit.cover,
-            fadeDuration: Duration.zero,
-            // No fallback: the scrim above is already the right colour, and a
-            // title card blown up to a page-wide blur is not a background.
-            fallback: const SizedBox.shrink(),
+          scale: scale,
+          alignment: Alignment.center,
+          child: ImageFiltered(
+            // Applied before the scale, so 2.4 here is ~20 px on screen.
+            imageFilter: ui.ImageFilter.blur(sigmaX: 2.4, sigmaY: 2.4, tileMode: TileMode.mirror),
+            child: SizedBox(
+              width: _base,
+              height: _base * 9 / 16,
+              child: NetImage(
+                url: url,
+                headers: headers,
+                width: _base,
+                fit: BoxFit.cover,
+                fadeDuration: Duration.zero,
+                // No fallback: the scrim above is already the right colour, and
+                // a title card blown up to a page-wide blur is not a background.
+                fallback: const SizedBox.shrink(),
+              ),
+            ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 }

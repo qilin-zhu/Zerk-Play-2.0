@@ -1049,12 +1049,23 @@ class _HomePageState extends State<HomePage> {
       child: ClipRect(
         child: Stack(fit: StackFit.expand, children: [
           Positioned.fill(
-            child: ShaderMask(
-              blendMode: BlendMode.dstIn,
-              shaderCallback: (rect) => fade.createShader(rect),
-              child: Stack(fit: StackFit.expand, children: [
-                Positioned(left: 0, right: 0, top: 0, height: _fullH, child: image),
-              ]),
+            // The mask is a saveLayer, and a saveLayer whose bottom edge lands
+            // on the visible cut can leave a one-pixel row of its own - the
+            // compositor blends that edge row against what is behind it. Two
+            // extra pixels hang below the clip, so the layer's edge is outside
+            // the picture and only a plain clip (no layer of its own) is left at
+            // the cut.
+            child: OverflowBox(
+              alignment: Alignment.topCenter,
+              minHeight: h + 2,
+              maxHeight: h + 2,
+              child: ShaderMask(
+                blendMode: BlendMode.dstIn,
+                shaderCallback: (rect) => fade.createShader(rect),
+                child: Stack(fit: StackFit.expand, children: [
+                  Positioned(left: 0, right: 0, top: 0, height: _fullH, child: image),
+                ]),
+              ),
             ),
           ),
           Positioned(
