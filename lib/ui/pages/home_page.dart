@@ -129,19 +129,7 @@ class _HomePageState extends State<HomePage> {
   static const _maxFade = 320.0;
   static const _heroFocusH = 44.0;
   static const _arrowLeft = 88.0;
-  /// Dissolves the poster's bottom edge into the page.
-  ///
-  /// The first two stops are the same colour on purpose: the last few percent of
-  /// the hero are then painted *fully* opaque, whatever fraction of a pixel the
-  /// layer happens to end on. With a single stop at 0 the last visible pixel row
-  /// was a partially covered blend of the raw artwork, which showed up as a
-  /// one-pixel bright line under the poster in windowed mode.
-  static const _bottomFade = LinearGradient(
-    begin: Alignment.bottomCenter,
-    end: Alignment.topCenter,
-    stops: [0.0, 0.06, 0.35, 0.7, 1.0],
-    colors: [Zc.background, Zc.background, Color(0xCC0B0B12), Color(0x550B0B12), Color(0x000B0B12)],
-  );
+
   List<_Row>? _rows;
   final _data = <_Row, Future<MixedItems>>{};
 
@@ -1037,25 +1025,37 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Poster composition: the artwork is laid out at the full height and
-  /// top-anchored, so the clip crops it from the bottom; a gradient dissolves
-  /// the cut edge, and the info card sits on the artwork's bottom-left.
+  /// top-anchored, so the clip crops it from the bottom; the artwork fades out
+  /// towards its lower edge, and the info card sits on the artwork's
+  /// bottom-left.
+  ///
+  /// The fade is a mask on the artwork itself (`BlendMode.dstIn`), not a sheet
+  /// of background colour painted on top of it. A painted sheet can only end in
+  /// the single colour it was painted with, and that is what produced the band
+  /// under the poster: the artwork dissolved into flat `Zc.background` while the
+  /// page behind it had already picked up the poster's own tint, so the two met
+  /// in a visible step. Masking the artwork to *transparent* lets whatever is
+  /// behind show through instead, so the layers join continuously at any scroll
+  /// position and with any artwork.
   Widget _heroPoster(double h, double c, Widget image, Widget panel) {
     final fadeOut = (1 - c * 1.7).clamp(0.0, 1.0);
     final fadeH = min(_maxFade, h * 0.62);
+    // Where the dissolve starts, as a fraction of the visible height. It has to
+    // be recomputed per frame: scrolling shortens the artwork, and the fade has
+    // to stay anchored to the edge that is on screen.
+    final fade = heroFadeMask(height: h, fadeHeight: fadeH);
     return SizedBox(
       height: h,
       child: ClipRect(
         child: Stack(fit: StackFit.expand, children: [
-          Positioned(left: 0, right: 0, top: 0, height: _fullH, child: image),
-          Positioned(
-            left: 0,
-            right: 0,
-            // Four pixels past the clip: the fade has to end *outside* the
-            // visible area, otherwise the row it ends inside keeps a sliver of
-            // the raw artwork (the bright hairline under the poster).
-            bottom: -4,
-            height: fadeH + 6,
-            child: const IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(gradient: _bottomFade))),
+          Positioned.fill(
+            child: ShaderMask(
+              blendMode: BlendMode.dstIn,
+              shaderCallback: (rect) => fade.createShader(rect),
+              child: Stack(fit: StackFit.expand, children: [
+                Positioned(left: 0, right: 0, top: 0, height: _fullH, child: image),
+              ]),
+            ),
           ),
           Positioned(
             left: contentLeft - 20,

@@ -5,6 +5,29 @@ import 'package:flutter/widgets.dart';
 import '../theme/tokens.dart';
 import 'net_image.dart';
 
+/// The mask that dissolves the hero artwork towards its bottom edge.
+///
+/// White where the artwork stays whole, transparent where it is gone; applied
+/// with `BlendMode.dstIn` it erases the artwork instead of painting a colour
+/// over it. That difference is the whole point: a painted sheet can only end in
+/// the one colour it was painted with, and the page behind it is a tint of the
+/// artwork, so the two always meet in a visible step.
+///
+/// [height] is the artwork's *visible* height and [fadeHeight] how much of it is
+/// spent dissolving, so the fade stays anchored to the edge on screen while the
+/// page scrolls.
+LinearGradient heroFadeMask({required double height, required double fadeHeight}) {
+  final from = height <= 0 ? 0.0 : ((height - fadeHeight) / height).clamp(0.0, 1.0);
+  return LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    // Non-linear: the artwork stays whole for most of its height, then a soft
+    // shoulder, then nothing. A straight 1 → 0 ramp reads as a gradient band.
+    stops: [0.0, from, from + (1 - from) * 0.45, from + (1 - from) * 0.78, 1.0],
+    colors: const [Color(0xFFFFFFFF), Color(0xFFFFFFFF), Color(0xB8FFFFFF), Color(0x5CFFFFFF), Color(0x00FFFFFF)],
+  );
+}
+
 /// The wash behind the rows: the artwork that is on the hero right now,
 /// stretched over the whole page and blurred, seen through a dark scrim.
 ///
@@ -18,9 +41,19 @@ class HeroAmbience extends StatelessWidget {
   final Uri? url;
   final Map<String, String>? headers;
 
-  /// How much of the blurred artwork survives the scrim at the bottom of the
-  /// page. Kept low: the rows and their captions are drawn on top of this.
-  static const _scrim = Color(0xB80B0B12);
+  /// How much of the blurred artwork survives the scrim. Kept dark: the rows and
+  /// their captions are drawn on top of this.
+  ///
+  /// The artwork's own dissolve happens just above this layer's middle, so the
+  /// wash has to be *tinted* there already - a near-black top would give the
+  /// poster something flat to fade into and the seam would be back, just as a
+  /// dark band instead of a bright line.
+  static const _scrim = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    stops: [0.0, 0.22, 0.62, 1.0],
+    colors: [Color(0xDE0B0B12), Color(0xCC0B0B12), Color(0xB40B0B12), Color(0xA00B0B12)],
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -43,18 +76,10 @@ class HeroAmbience extends StatelessWidget {
                 Stack(fit: StackFit.expand, children: [...previous, ?current]),
             child: _Blurred(key: ValueKey(u), url: u, headers: headers),
           ),
-        // Opaque background at the very top (that is where the hero's fade
-        // ends), loosening into the tint further down the page.
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              stops: [0.0, 0.20, 0.55, 1.0],
-              colors: [Zc.background, Color(0xF00B0B12), Color(0xC40B0B12), _scrim],
-            ),
-          ),
-        ),
+        // A dark wash with the artwork's colour in it, from the top of the page
+        // all the way down. Uniform enough that the poster's own dissolve has
+        // nothing to step against.
+        const DecoratedBox(decoration: BoxDecoration(gradient: _scrim)),
       ]),
     );
   }

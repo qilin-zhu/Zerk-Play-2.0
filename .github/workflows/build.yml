@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.11'
+  APP_VERSION: '2.10.12'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -407,4 +407,8 @@ jobs:
 
             **侧边栏左上角的图标默认隐藏**
             那个角落里的大图标平时不显示了，页面干净一些；鼠标移进侧边栏、或者用键盘把焦点移进侧边栏时，它会淡入并轻微放大出现。服务器切换面板打开时也一定显示（面板是挂在它右边的）。它没有被移出控件树，所以 D-pad 仍然可以从它进入服务器列表。
+
+            **海报和背景之间真正融为一体了**
+            上一版是「在海报上盖一层背景色的渐变」，而海报下面那层背景已经带上了海报自己的色偏 —— 一个盖成纯色、一个是带色的，两者只能在某一条线上对上，所以那条缝还在，只是从亮线变成了暗带。
+            这一版换成标准的做法：不再盖颜色，而是用 `ShaderMask` + `BlendMode.dstIn` 把海报本身渐渐擦成透明（白→透明的遮罩，带软肩的非线性曲线，不是从头到尾的直线渐变）。海报消失的地方露出的是它自己的模糊放大版，颜色天然是连续的，所以接缝在任何滚动位置、任何一张海报上都不存在。另外加了一个 widget 测试 `test/hero_fade_test.dart`：逐行取像素，断言切口上方那一行已经和背景一致、且整列没有任何相邻两行跳变。
 
