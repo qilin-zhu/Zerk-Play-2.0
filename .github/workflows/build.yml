@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.10'
+  APP_VERSION: '2.10.11'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -404,4 +404,7 @@ jobs:
 
             **海报下沿那条白线没有了**
             窗口模式下，海报和背景交界处有一条约一像素的亮线（全屏时看不出来）。原因是海报底部那层渐变刚好结束在裁切边缘上：那一行像素只被渐变盖住了一部分，露出的海报原图比背景亮，就成了一条线。现在渐变多预留几像素并且最后一段是完全不透明的底色，海报的边缘一定被盖满；底色又和背景层同色，两层之间没有台阶。
+
+            **侧边栏左上角的图标默认隐藏**
+            那个角落里的大图标平时不显示了，页面干净一些；鼠标移进侧边栏、或者用键盘把焦点移进侧边栏时，它会淡入并轻微放大出现。服务器切换面板打开时也一定显示（面板是挂在它右边的）。它没有被移出控件树，所以 D-pad 仍然可以从它进入服务器列表。
 

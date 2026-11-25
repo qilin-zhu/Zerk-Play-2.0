@@ -8,7 +8,7 @@ import '../host.dart';
 import 'log_sink.dart';
 
 abstract final class AppLog {
-  static const appVersion = '2.10.10+50';
+  static const appVersion = '2.10.11+51';
 
   static LogSink? _sink;
   static DebugPrintCallback? _console;

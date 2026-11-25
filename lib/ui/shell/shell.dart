@@ -377,6 +377,12 @@ class _ShellState extends State<Shell> {
             // The rail widens while the switcher is open, so the panel can be
             // anchored to its right edge without measuring anything.
             final railExpanded = _menuOpen || (_railFocused && (!pointer || _railHovered));
+            // The app mark in the rail's corner stays hidden until the rail is
+            // actually in use: over artwork it is the first thing the eye lands
+            // on, and every page looks cleaner without it. Hovering the rail or
+            // giving it keyboard focus brings it back (the switcher needs it as
+            // its anchor, so an open switcher always shows it).
+            final logoVisible = _menuOpen || _railHovered || _railFocused;
             // The panel starts under the mark (~110 px down), so it can use
             // whatever is left of the window minus a bottom margin.
             final panelHeight = (MediaQuery.sizeOf(context).height - 140).clamp(300.0, 720.0).toDouble();
@@ -452,6 +458,7 @@ class _ShellState extends State<Shell> {
                             profile: services.profiles.profile,
                             current: _tab,
                             expanded: railExpanded,
+                            logoVisible: logoVisible,
                             menuOpen: _menuOpen,
                             logoNode: _logoNode,
                             logoLink: _logoLink,
@@ -561,6 +568,7 @@ class _Rail extends StatefulWidget {
     required this.profile,
     required this.current,
     required this.expanded,
+    required this.logoVisible,
     required this.menuOpen,
     required this.logoNode,
     required this.logoLink,
@@ -584,6 +592,10 @@ class _Rail extends StatefulWidget {
   final UserProfile? profile;
   final ShellTab current;
   final bool expanded;
+
+  /// Whether the app mark in the corner is on screen: true only while the rail
+  /// is hovered, focused or has its switcher open.
+  final bool logoVisible;
 
   /// The server switcher is showing: the logo keeps its chevron turned down.
   final bool menuOpen;
@@ -694,12 +706,26 @@ class _RailState extends State<_Rail> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _Logo(
-            expanded: expanded,
-            open: widget.menuOpen,
-            node: widget.logoNode,
-            link: widget.logoLink,
-            onSelect: widget.onOpenServers,
+          // Fades out of the way (and slightly down in scale) when the rail is
+          // idle. It is never removed from the tree: it is the D-pad's way into
+          // the server switcher, and focusing it is what makes it visible again.
+          AnimatedOpacity(
+            opacity: widget.logoVisible ? 1 : 0,
+            duration: Zm.normal,
+            curve: Zm.curve,
+            child: AnimatedScale(
+              scale: widget.logoVisible ? 1 : 0.86,
+              duration: Zm.normal,
+              curve: Zm.curve,
+              alignment: Alignment.centerLeft,
+              child: _Logo(
+                expanded: expanded,
+                open: widget.menuOpen,
+                node: widget.logoNode,
+                link: widget.logoLink,
+                onSelect: widget.onOpenServers,
+              ),
+            ),
           ),
           const Spacer(),
           for (final entry in _railOrder)
