@@ -16,6 +16,19 @@ val uploadKey = listOfNotNull(System.getenv("ZERK_PLAY_UPLOAD_KEY")?.let(::file)
     .firstOrNull { it.isFile }
     ?.let { f -> Properties().apply { f.inputStream().use(::load) } }
 
+// Optional single-ABI build, used by CI to ship a 32-bit fallback APK for old
+// TV boxes:
+//   flutter build apk --target-platform android-arm -Pzerk.abi=armeabi-v7a
+// --target-platform alone is not enough: it only picks the AOT snapshot, and
+// the Flutter plugin still puts every supported ABI into the APK, which leaves
+// arm64-v8a without a libapp.so and makes the APK crash on 64-bit devices.
+// abiFilters set here win over the plugin's defaults.
+val abiFilter = (project.findProperty("zerk.abi") as String?)
+    ?.split(',', ';')
+    ?.map { it.trim() }
+    ?.filter { it.isNotEmpty() }
+    .orEmpty()
+
 android {
     namespace = "cloud.zerk.play"
     compileSdk = flutter.compileSdkVersion
@@ -32,6 +45,12 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        if (abiFilter.isNotEmpty()) {
+            ndk {
+                abiFilters.clear()
+                abiFilters.addAll(abiFilter)
+            }
+        }
     }
 
     signingConfigs {

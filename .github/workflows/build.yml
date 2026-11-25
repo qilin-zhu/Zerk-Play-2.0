@@ -74,13 +74,13 @@ jobs:
           ls -lh dist
 
       # 32-bit-only build for old TV boxes that refuse the universal APK.
-      # Deliberately NOT --split-per-abi: that adds an ABI offset to the
-      # versionCode, so whichever number came out lower could no longer be
-      # installed over the other one ("App not installed"). Building with
-      # --target-platform keeps the same versionCode as the universal APK, so
-      # the two are interchangeable.
+      # Deliberately NOT --split-per-abi: that multiplies the versionCode by
+      # 1000 per ABI, so the smaller number would no longer install over the
+      # bigger one ("App not installed") and the in-app updater, which always
+      # serves the universal APK, would be blocked. -Pzerk.abi drops the other
+      # ABIs instead, so both APKs keep the same versionCode.
       - name: Build 32-bit APK
-        run: flutter build apk --release --target-platform android-arm --dart-define=APP_VERSION=$APP_VERSION
+        run: flutter build apk --release --target-platform android-arm --android-project-arg=zerk.abi=armeabi-v7a --dart-define=APP_VERSION=$APP_VERSION
 
       - name: Rename 32-bit APK
         run: |
@@ -91,27 +91,54 @@ jobs:
           cp "$newest" "dist/ZerkPlay-${APP_VERSION}-android-arm32.apk"
           ls -lh dist
 
-      # A wrong split would only show up as "cannot install" on someone else's
-      # TV, so fail the build here instead: the universal APK must still carry
-      # arm64-v8a, and the 32-bit one must carry nothing but armeabi-v7a.
+      # A wrong split only shows up as "cannot install" or an instant crash on
+      # someone else's TV, so fail the build here instead:
+      #  - the 32-bit APK must carry armeabi-v7a and nothing else, and every
+      #    ABI it does carry needs libapp.so (a leftover arm64-v8a directory
+      #    without the AOT snapshot makes the app crash on 64-bit devices);
+      #  - the universal APK must still carry arm64-v8a;
+      #  - both must share one versionCode, otherwise one cannot be installed
+      #    over the other and updates break.
       - name: Verify APK ABIs
         run: |
           set -e
           abis() {
             unzip -l "$1" | awk '{print $4}' | grep -E '^lib/' | cut -d/ -f2 | sort -u || true
           }
-          for f in dist/*.apk; do
+          a32="dist/ZerkPlay-${APP_VERSION}-android-arm32.apk"
+          uni="dist/ZerkPlay-${APP_VERSION}-android.apk"
+          for f in "$a32" "$uni"; do
             echo "== $f"
             abis "$f"
+            for a in $(abis "$f"); do
+              if ! unzip -l "$f" | grep -q "lib/$a/libapp.so"; then
+                echo "lib/$a/libapp.so missing in $f" >&2
+                exit 1
+              fi
+            done
           done
-          a32=$(abis "dist/ZerkPlay-${APP_VERSION}-android-arm32.apk")
-          if [ "$a32" != "armeabi-v7a" ]; then
-            echo "32-bit APK has unexpected ABIs: [$a32]" >&2
+          a32abis=$(abis "$a32")
+          if [ "$a32abis" != "armeabi-v7a" ]; then
+            echo "32-bit APK has unexpected ABIs: [$a32abis]" >&2
             exit 1
           fi
-          if ! abis "dist/ZerkPlay-${APP_VERSION}-android.apk" | grep -qx 'arm64-v8a'; then
+          if ! abis "$uni" | grep -qx 'arm64-v8a'; then
             echo "universal APK lost its arm64-v8a libraries" >&2
             exit 1
+          fi
+
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$aapt2" ]; then
+            vc() { "$aapt2" dump badging "$1" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1; }
+            vc32=$(vc "$a32")
+            vcu=$(vc "$uni")
+            echo "versionCode: arm32=$vc32 universal=$vcu"
+            if [ "$vc32" != "$vcu" ]; then
+              echo "the two APKs must share a versionCode so either can be installed over the other" >&2
+              exit 1
+            fi
+          else
+            echo "aapt2 not found, skipping versionCode comparison"
           fi
 
       - name: Upload APK
