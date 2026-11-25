@@ -75,6 +75,12 @@ void main() {
     expect(lum(4), greaterThan(150), reason: 'artwork should be intact at the top');
     expect((lum(heroH.toInt() - 1) - lum(heroH.toInt() + 2)).abs(), lessThan(2),
         reason: 'the row just above the cut must already match the page behind it');
+    // The last rows before the cut must be *exactly* the page: any residue of the
+    // artwork there is what shows up as a hairline at some window sizes.
+    for (var y = heroH.toInt() - 18; y < heroH.toInt(); y++) {
+      expect((lum(y) - lum(heroH.toInt() + 2)).abs(), lessThan(1),
+          reason: 'row $y still carries artwork');
+    }
 
     // And no row anywhere in the dissolve may jump: that is the visible line.
     var worst = 0.0;

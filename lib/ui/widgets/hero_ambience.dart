@@ -16,15 +16,36 @@ import 'net_image.dart';
 /// [height] is the artwork's *visible* height and [fadeHeight] how much of it is
 /// spent dissolving, so the fade stays anchored to the edge on screen while the
 /// page scrolls.
-LinearGradient heroFadeMask({required double height, required double fadeHeight}) {
-  final from = height <= 0 ? 0.0 : ((height - fadeHeight) / height).clamp(0.0, 1.0);
+///
+/// [edgeClearance] pixels at the bottom are kept completely transparent. That
+/// matters more than it sounds: the artwork is clipped at that edge, and a layer
+/// whose last row still has a hint of image in it meets the layer below in a
+/// hairline - one that only shows up at some window sizes and scroll offsets,
+/// which is exactly how the "bright line under the poster" was reported. With
+/// the fade finished before the cut there is nothing left to leave a line.
+LinearGradient heroFadeMask({
+  required double height,
+  required double fadeHeight,
+  double edgeClearance = 24,
+}) {
+  final h = height <= 0 ? 1.0 : height;
+  final clear = (edgeClearance / h).clamp(0.0, 0.25);
+  final end = 1.0 - clear;
+  final from = ((h - fadeHeight) / h).clamp(0.0, end);
   return LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
     // Non-linear: the artwork stays whole for most of its height, then a soft
     // shoulder, then nothing. A straight 1 → 0 ramp reads as a gradient band.
-    stops: [0.0, from, from + (1 - from) * 0.45, from + (1 - from) * 0.78, 1.0],
-    colors: const [Color(0xFFFFFFFF), Color(0xFFFFFFFF), Color(0xB8FFFFFF), Color(0x5CFFFFFF), Color(0x00FFFFFF)],
+    stops: [0.0, from, from + (end - from) * 0.45, from + (end - from) * 0.78, end, 1.0],
+    colors: const [
+      Color(0xFFFFFFFF),
+      Color(0xFFFFFFFF),
+      Color(0xB8FFFFFF),
+      Color(0x5CFFFFFF),
+      Color(0x00FFFFFF),
+      Color(0x00FFFFFF),
+    ],
   );
 }
 

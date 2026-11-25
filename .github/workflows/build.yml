@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.12'
+  APP_VERSION: '2.10.13'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -411,4 +411,7 @@ jobs:
             **海报和背景之间真正融为一体了**
             上一版是「在海报上盖一层背景色的渐变」，而海报下面那层背景已经带上了海报自己的色偏 —— 一个盖成纯色、一个是带色的，两者只能在某一条线上对上，所以那条缝还在，只是从亮线变成了暗带。
             这一版换成标准的做法：不再盖颜色，而是用 `ShaderMask` + `BlendMode.dstIn` 把海报本身渐渐擦成透明（白→透明的遮罩，带软肩的非线性曲线，不是从头到尾的直线渐变）。海报消失的地方露出的是它自己的模糊放大版，颜色天然是连续的，所以接缝在任何滚动位置、任何一张海报上都不存在。另外加了一个 widget 测试 `test/hero_fade_test.dart`：逐行取像素，断言切口上方那一行已经和背景一致、且整列没有任何相邻两行跳变。
+
+            **海报最下沿再留 24 像素全透明**
+            2.10.12 的遮罩是「到边才刚变全透明」，也就是海报的那条裁切边上还挂着一点点原图。在窗口模式下，这一条边正好落在两层画面的接缝上，某些窗口尺寸和滚动位置就会露出一像素亮线（全屏尺寸不同，看不出来）。现在淡化在海报裁切边**上方 24 像素就已经完成**，边外什么都没有，也就不可能再露出线来。测试里也加了这条断言：切口前 18 行必须和背景完全一致（差 < 1）。
 
