@@ -6,6 +6,7 @@ import '../../app/app_services.dart';
 import '../../core/emby/models/emby_item.dart';
 import '../../core/host.dart';
 import '../../core/log/app_log.dart';
+import '../../core/text/pinyin.dart';
 import '../../data/catalog_api.dart';
 import '../../data/recommendations.dart';
 import '../../data/seerr_api.dart';
@@ -73,7 +74,12 @@ class _SearchPageState extends State<SearchPage> {
     });
   }
 
-  Future<void> _search(String q) async {
+  Future<void> _search(String raw) async {
+    // Whatever an IME left in the field goes out clean: an apostrophe between
+    // syllables (`bu'bu'jing'x`) turns a pinyin query into a literal string no
+    // server can match. Emby answers `bbjx` and `bubujingxin` on its own once
+    // the separators are gone (verified against a real server).
+    final q = cleanQuery(raw);
     if (q == _query) return;
     _query = q;
     final token = ++_token;
@@ -185,11 +191,20 @@ class _SearchPageState extends State<SearchPage> {
 
   static Future<List<EmbyItem>> _matchingCollections(CatalogApi c, String q) async {
     final words = _fold(q).split(' ').where((w) => w.isNotEmpty).toList();
+    final needle = q.trim().toLowerCase();
     try {
       final all = await c.allCollections().timeout(const Duration(seconds: 8));
       return [
         for (final col in all)
-          if (words.every(_fold(col.name).contains)) col,
+          // `_fold` keeps only a-z0-9, so a Chinese query folds to nothing at
+          // all — and `words.every(...)` over an empty list is true, which used
+          // to make every search for a Chinese title come back with the first
+          // thirty collections in the library. Chinese queries are matched on
+          // the name itself instead.
+          if (words.isEmpty
+              ? needle.isNotEmpty && col.name.toLowerCase().contains(needle)
+              : words.every(_fold(col.name).contains))
+            col,
       ].take(30).toList();
     } catch (e) {
       debugPrint('[search] collections: $e');

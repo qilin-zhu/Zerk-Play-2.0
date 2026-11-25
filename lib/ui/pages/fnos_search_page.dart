@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import '../../app/app_services.dart';
 import '../../core/fnos/fnos_client.dart';
 import '../../core/fnos/fnos_item.dart';
+import '../../core/fnos/fnos_title_index.dart';
 import '../../core/host.dart';
 import '../../core/log/app_log.dart';
+import '../../core/text/pinyin.dart';
 import '../../l10n/l10n.dart';
 import '../focus/focus_zone.dart';
 import '../theme/tokens.dart';
@@ -17,6 +19,11 @@ import 'fnos_cards.dart';
 /// fnOS keyword search (GET search/list?q=), laid out like the Emby search:
 /// a pill input with the loading spinner inside, the shared virtual keyboard
 /// below it, then the result grid.
+///
+/// trimemedia matches whole Chinese words only, so the two things people
+/// actually type — pinyin initials (`bbjx`) and part of a title (`步步`) — came
+/// back empty. Those are matched locally against [FnosTitleIndex] and merged
+/// with the server's answer, so the grid shows whatever either side found.
 class FnOsSearchPage extends StatefulWidget {
   const FnOsSearchPage({super.key});
 
@@ -28,10 +35,15 @@ class _FnOsSearchPageState extends State<FnOsSearchPage> {
   final _controller = TextEditingController();
   final _field = FocusNode(debugLabel: 'fnos-search-field');
   Timer? _debounce;
-  List<FnOsItem>? _results;
   String _query = '';
   String? _error;
   bool _busy = false;
+
+  /// What the server answered for the current term and what the local index
+  /// matched, kept apart so one landing never wipes the other.
+  List<FnOsItem> _remote = const [];
+  List<FnOsItem> _local = const [];
+  bool _settled = false;
 
   /// One request at a time, newest term last. trimemedia's search is a single
   /// keyword call, but it is not instant on a large library and the keyboard
@@ -42,12 +54,53 @@ class _FnOsSearchPageState extends State<FnOsSearchPage> {
 
   FnosClient get _client => AppServicesScope.read(context).janus.fnos!;
 
+  /// Server hits first — they carry the full metadata — then the index hits the
+  /// server could not find, without duplicates.
+  List<FnOsItem> get _results {
+    if (!_settled && _remote.isEmpty && _local.isEmpty) return const [];
+    final seen = {for (final r in _remote) r.guid};
+    return [..._remote, for (final l in _local) if (seen.add(l.guid)) l];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // Start the title crawl immediately: it runs in the background, a page at a
+    // time, and the first search almost always lands on a partly built index.
+    final index = FnosTitleIndex.of(_client);
+    _index = index;
+    index.revision.addListener(_refreshLocal);
+  }
+
+  FnosTitleIndex? _index;
+
   @override
   void dispose() {
+    _index?.revision.removeListener(_refreshLocal);
+    _refreshTimer?.cancel();
     _debounce?.cancel();
     _controller.dispose();
     _field.dispose();
     super.dispose();
+  }
+
+  /// The index grew: re-run the match for whatever is on screen. This is what
+  /// makes a search started on a cold index fill itself in.
+  ///
+  /// Coalesced, because a page of 100 entries ticks the revision every ~140 ms
+  /// and each match walks the whole index.
+  Timer? _refreshTimer;
+
+  void _refreshLocal() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer(const Duration(milliseconds: 350), () {
+      final q = _query;
+      final index = _index;
+      if (!mounted || q.isEmpty || index == null) return;
+      final hits = index.find(q);
+      if (hits.length == _local.length) return;
+      setState(() => _local = hits);
+    });
   }
 
   void _onChanged(String text) {
@@ -55,19 +108,41 @@ class _FnOsSearchPageState extends State<FnOsSearchPage> {
     final q = text.trim();
     if (q.isEmpty) {
       setState(() {
-        _results = null;
         _query = '';
+        _remote = const [];
+        _local = const [];
         _error = null;
         _busy = false;
+        _settled = false;
       });
       return;
     }
     _debounce = Timer(const Duration(milliseconds: 450), () => _search(q));
   }
 
-  Future<void> _search(String q) async {
+  Future<void> _search(String raw) async {
+    final q = cleanQuery(raw);
     if (q.isEmpty || q == _query) return;
     _query = q;
+    setState(() {
+      _remote = const [];
+      _local = const [];
+      _error = null;
+      _busy = true;
+      _settled = false;
+    });
+    // The local index answers from memory in microseconds; the server's own
+    // search takes 6-8 s for a Chinese keyword and then usually answers with
+    // nothing, so it is only asked when the index has no answer at all.
+    _matchLocal(q);
+    if (_local.isNotEmpty) {
+      _queued = null;
+      setState(() {
+        _busy = false;
+        _settled = true;
+      });
+      return;
+    }
     if (_inflight) {
       _queued = q;
       return;
@@ -76,19 +151,20 @@ class _FnOsSearchPageState extends State<FnOsSearchPage> {
     var term = q;
     try {
       while (true) {
-        setState(() {
-          _busy = true;
-          _error = null;
-        });
         final started = DateTime.now();
         try {
           final raw = await _client.search(term).timeout(const Duration(seconds: 30));
           final list = raw is List ? raw : raw is Map ? raw['list'] as List? ?? const [] : const [];
-          final items = [for (final e in list) if (e is Map) FnOsItem.from(e)];
+          // `Person` entries are cast, not media: they open onto nothing, and
+          // they are most of what the server answers for a short query.
+          final items = [
+            for (final e in list)
+              if (e is Map) FnOsItem.from(e),
+          ].where((i) => i.kind != 'person').toList();
           AppLog.write('[fnos] search "$term" -> ${items.length} in '
               '${DateTime.now().difference(started).inMilliseconds} ms');
           if (!mounted) return;
-          if (term == _query) setState(() => _results = items);
+          if (term == _query) setState(() => _remote = items);
         } catch (e) {
           if (mounted && term == _query) setState(() => _error = '$e');
         }
@@ -99,8 +175,28 @@ class _FnOsSearchPageState extends State<FnOsSearchPage> {
       }
     } finally {
       _inflight = false;
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _settled = true;
+        });
+      }
     }
+  }
+
+  /// Pinyin initials and partial titles, matched against the account's own
+  /// titles. Synchronous: the index is a plain in-memory scan, and the crawl
+  /// that fills it ticks [FnosTitleIndex.revision] when it has more.
+  void _matchLocal(String q) {
+    final index = _index;
+    if (index == null) return;
+    final hits = index.find(q);
+    if (hits.isEmpty) {
+      if (_local.isNotEmpty) setState(() => _local = const []);
+      return;
+    }
+    AppLog.write('[fnos] local match "$q": ${hits.length} of ${index.length}');
+    setState(() => _local = hits);
   }
 
   @override
@@ -167,12 +263,21 @@ class _FnOsSearchPageState extends State<FnOsSearchPage> {
                   padding: EdgeInsets.only(left: contentLeft, top: 10, right: 120),
                   child: Text(l10n.fnosLoadFailed(_error!), style: Zt.body),
                 )
-              : results == null
+              : _query.isEmpty
                   ? Padding(
                       padding: EdgeInsets.only(left: contentLeft, top: 10, right: 120),
                       child: Text(l10n.searchHint, style: Zt.body.copyWith(color: Zc.textFaint)),
                     )
-                  : FocusZone(
+                  : results.isEmpty
+                      ? Padding(
+                          padding: EdgeInsets.only(left: contentLeft, top: 10, right: 120),
+                          // "No results" is only honest once the index has been
+                          // crawled to the end: before that the page is still
+                          // filling in and the text would flash on every search.
+                          child: Text(_settled && (_index?.complete ?? true) ? l10n.noResultsFor(_query) : '',
+                              style: Zt.body.copyWith(color: Zc.textFaint)),
+                        )
+                      : FocusZone(
                       debugLabel: 'fnos-search-results',
                       child: GridView.builder(
                         clipBehavior: Clip.none,
