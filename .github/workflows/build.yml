@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.11'
+  APP_VERSION: '2.10.12'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -91,6 +91,36 @@ jobs:
           cp "$newest" "dist/ZerkPlay-${APP_VERSION}-android-arm32.apk"
           ls -lh dist
 
+      # Flutter 3.35 raised the engine's own minSdkVersion to 24, and the
+      # manifest merger keeps the highest value it finds, so the APKs built
+      # above still refuse to install on Android 6.0 even though this project
+      # asks for 23. Rewrite the packaged manifest, then re-align and re-sign:
+      # changing the manifest invalidates the signature, and --min-sdk-version
+      # 23 is what makes apksigner add a v1 (JAR) signature - API 23 cannot
+      # verify v2-only signatures.
+      - name: Lower minSdk to 23 (Android 6.0)
+        run: |
+          set -e
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          ks="android/app/$(sed -n 's/^storeFile=//p' android/key.properties)"
+          key_alias=$(sed -n 's/^keyAlias=//p' android/key.properties)
+          store_pass=$(sed -n 's/^storePassword=//p' android/key.properties)
+          key_pass=$(sed -n 's/^keyPassword=//p' android/key.properties)
+          for f in dist/*.apk; do
+            echo "== $f"
+            python3 tools/patch_apk_minsdk.py "$f" "$RUNNER_TEMP/patched.apk" 23
+            # -P 16 page-aligns the native libraries for 16 KB page devices;
+            # build-tools older than 35 do not know that flag.
+            if ! "$bt/zipalign" -f -P 16 4 "$RUNNER_TEMP/patched.apk" "$RUNNER_TEMP/aligned.apk" 2>/dev/null; then
+              "$bt/zipalign" -f -p 4 "$RUNNER_TEMP/patched.apk" "$RUNNER_TEMP/aligned.apk"
+            fi
+            "$bt/apksigner" sign --ks "$ks" --ks-key-alias "$key_alias" \
+              --ks-pass "pass:$store_pass" --key-pass "pass:$key_pass" \
+              --min-sdk-version 23 \
+              --out "$RUNNER_TEMP/signed.apk" "$RUNNER_TEMP/aligned.apk"
+            mv "$RUNNER_TEMP/signed.apk" "$f"
+          done
+
       # A wrong split only shows up as "cannot install" or an instant crash on
       # someone else's TV, so fail the build here instead:
       #  - the 32-bit APK must carry armeabi-v7a and nothing else, and every
@@ -98,7 +128,10 @@ jobs:
       #    without the AOT snapshot makes the app crash on 64-bit devices);
       #  - the universal APK must still carry arm64-v8a;
       #  - both must share one versionCode, otherwise one cannot be installed
-      #    over the other and updates break.
+      #    over the other and updates break;
+      #  - both must declare minSdk 23 and carry a v1 signature, or Android 6.0
+      #    rejects the package again;
+      #  - and both must still be signed with the project's identity.
       - name: Verify APK ABIs
         run: |
           set -e
@@ -137,9 +170,32 @@ jobs:
               echo "the two APKs must share a versionCode so either can be installed over the other" >&2
               exit 1
             fi
+            for f in "$a32" "$uni"; do
+              m=$("$aapt2" dump badging "$f" | sed -n "s/^minSdkVersion:'\([0-9]*\)'/\1/p" | head -1)
+              echo "minSdk in $f: $m"
+              if [ "$m" != "23" ]; then
+                echo "$f declares minSdk $m, the patch did not take" >&2
+                exit 1
+              fi
+            done
           else
             echo "aapt2 not found, skipping versionCode comparison"
           fi
+
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          for f in "$a32" "$uni"; do
+            sig=$("$bt/apksigner" verify --print-certs "$f" 2>&1)
+            if ! echo "$sig" | grep -q 'Verified using v1 scheme (JAR signing): true'; then
+              echo "$f has no v1 signature, Android 6.0 will refuse it" >&2
+              exit 1
+            fi
+            digest=$(echo "$sig" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
+            echo "cert ($f): $digest"
+            if [ "$digest" != "b891c59b65a0d130fa6a86abb37cd421787bff3f191a6f72ce684a11180e10d7" ]; then
+              echo "$f is not signed with the project identity, updates will fail to install" >&2
+              exit 1
+            fi
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -394,7 +450,7 @@ jobs:
             **这次主要是验证 Android 6.0 能不能跑**
             安装门槛从 Android 7.0 压到了 **6.0（API 23）**，6.0 的盒子现在能装了。但要说明白：Flutter 从 3.35 起官方最低要求就是 24，这一版是绕过引擎的声明硬压下来的，属于官方不支持的范围，所以 6.0 上到底能不能正常用只能实测 —— 装完先看能不能进首页，再试着播一集；如果闪退，把日志（`Android/data/cloud.zerk.play/files/logs/` 或应用内日志页）发我。
 
-            6.0 设备请装 `-android-arm32.apk`（老盒子基本都是 32 位 ARM）。Android 7.0 及以上的设备不受影响，照常用通用包，功能完全一样。
+            6.0 设备一般用 `-android-arm32.apk`（老盒子基本都是 32 位 ARM），通用包也可以装（两个包都降到 6.0 了）。Android 7.0 及以上的设备不受影响，照常用通用包，功能完全一样。
 
             **打开某一集时，焦点落在这一集上**
             以前不管点的是第几集，进来以后焦点都在上面的播放按钮，剧集行还是从第 1 集开始显示 —— 打开第 201 集要自己横着翻两百个海报。现在进来就会把剧集行滚到当前这一集，焦点直接落在它的海报上。Emby、Jellyfin、飞牛影视三个服务都是这样。
