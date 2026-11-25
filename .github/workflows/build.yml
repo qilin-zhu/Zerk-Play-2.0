@@ -73,6 +73,47 @@ jobs:
           cp build/app/outputs/flutter-apk/app-release.apk "dist/ZerkPlay-${APP_VERSION}-android.apk"
           ls -lh dist
 
+      # 32-bit-only build for old TV boxes that refuse the universal APK.
+      # Deliberately NOT --split-per-abi: that adds an ABI offset to the
+      # versionCode, so whichever number came out lower could no longer be
+      # installed over the other one ("App not installed"). Building with
+      # --target-platform keeps the same versionCode as the universal APK, so
+      # the two are interchangeable.
+      - name: Build 32-bit APK
+        run: flutter build apk --release --target-platform android-arm --dart-define=APP_VERSION=$APP_VERSION
+
+      - name: Rename 32-bit APK
+        run: |
+          # The second build rewrites an APK in the same folder; take the one
+          # it just produced instead of assuming a file name.
+          newest=$(ls -t build/app/outputs/flutter-apk/*.apk | head -1)
+          echo "using $newest"
+          cp "$newest" "dist/ZerkPlay-${APP_VERSION}-android-arm32.apk"
+          ls -lh dist
+
+      # A wrong split would only show up as "cannot install" on someone else's
+      # TV, so fail the build here instead: the universal APK must still carry
+      # arm64-v8a, and the 32-bit one must carry nothing but armeabi-v7a.
+      - name: Verify APK ABIs
+        run: |
+          set -e
+          abis() {
+            unzip -l "$1" | awk '{print $4}' | grep -E '^lib/' | cut -d/ -f2 | sort -u || true
+          }
+          for f in dist/*.apk; do
+            echo "== $f"
+            abis "$f"
+          done
+          a32=$(abis "dist/ZerkPlay-${APP_VERSION}-android-arm32.apk")
+          if [ "$a32" != "armeabi-v7a" ]; then
+            echo "32-bit APK has unexpected ABIs: [$a32]" >&2
+            exit 1
+          fi
+          if ! abis "dist/ZerkPlay-${APP_VERSION}-android.apk" | grep -qx 'arm64-v8a'; then
+            echo "universal APK lost its arm64-v8a libraries" >&2
+            exit 1
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -242,9 +283,12 @@ jobs:
             | --- | --- | --- |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包，推荐 |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip` | 免安装，解压即用 |
-            | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
+            | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 通用包（arm64 + 32 位 ARM + x86_64），先试这个 |
+            | Android 32 位 | `ZerkPlay-${{ env.APP_VERSION }}-android-arm32.apk` | 只有 32 位 ARM，给通用包装不上的老电视盒子 |
 
-            这一版自带三个安装包，不再另外提供兼容旧客户端的固定文件名副本（`ZerkPlay-Public-*`）。还在 2.10.0 及更早版本的设备，手动装一次本版即可，之后检查更新恢复正常。
+            两个安卓包版本号、签名完全一致，可以互相覆盖安装，更新检查一律推通用包；32 位那个只是给老设备兜底，一般设备不用下。
+
+            这一版自带四个安装包，不再另外提供兼容旧客户端的固定文件名副本（`ZerkPlay-Public-*`）。还在 2.10.0 及更早版本的设备，手动装一次本版即可，之后检查更新恢复正常。
 
             **搜索变快了，也不再搜单集**
             以前每输入一个字就同时发电影、剧集、单集三个请求，单集那一项在服务器上要跑半分钟，结果全被最慢的那个拖住。现在只发一个电影 + 剧集的请求，结果分批往上贴，上个请求没回来不会再压新的。搜「单集」也不会再出现在提示语里。
@@ -309,6 +353,7 @@ jobs:
             dist/ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip
             dist/ZerkPlay-${{ env.APP_VERSION }}-setup.exe
             dist/ZerkPlay-${{ env.APP_VERSION }}-android.apk
+            dist/ZerkPlay-${{ env.APP_VERSION }}-android-arm32.apk
           body: |
             **测试版 ${{ env.APP_VERSION }}**，用来验证下面几项修复，不是正式版。
 
@@ -316,7 +361,8 @@ jobs:
             | --- | --- | --- |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-windows-x64-portable.zip` | 免安装，解压即用 |
             | Windows x64 | `ZerkPlay-${{ env.APP_VERSION }}-setup.exe` | 安装包 |
-            | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 手机 / 平板 / 电视盒子 |
+            | Android | `ZerkPlay-${{ env.APP_VERSION }}-android.apk` | 通用包（arm64 + 32 位 ARM + x86_64） |
+            | Android 32 位 | `ZerkPlay-${{ env.APP_VERSION }}-android-arm32.apk` | 只有 32 位 ARM，给通用包装不上的老盒子 |
 
             **打开某一集时，焦点落在这一集上**
             以前不管点的是第几集，进来以后焦点都在上面的播放按钮，剧集行还是从第 1 集开始显示 —— 打开第 201 集要自己横着翻两百个海报。现在进来就会把剧集行滚到当前这一集，焦点直接落在它的海报上。Emby、Jellyfin、飞牛影视三个服务都是这样。

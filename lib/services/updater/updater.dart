@@ -66,6 +66,10 @@ abstract final class Updater {
 
   static bool _isOurAsset(String name) {
     if (name.startsWith('ZerkPlay-Public-')) return false; // legacy names kept only for pre-2.10.1 clients
+    // Releases also carry a 32-bit ARM build for old TV boxes. It is a
+    // fallback for installs that cannot use the universal APK, not something
+    // to hand out as an update - the universal APK carries armeabi-v7a too.
+    if (name.contains('-arm32')) return false;
     if (Host.isAndroid) return name.startsWith('ZerkPlay-') && name.endsWith('.apk');
     return name.startsWith('ZerkPlay-') && name.endsWith('-setup.exe');
   }
