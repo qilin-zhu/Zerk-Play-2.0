@@ -330,7 +330,7 @@
   "unwatched": "Ungesehen",
   "favorites": "Favoriten",
   "nothingWithFilters": "Mit diesen Filtern gibt es hier nichts.",
-  "searchHint": "Filme, Serien, Folgen…",
+  "searchHint": "Filme, Serien…",
   "noResultsFor": "Keine Ergebnisse für „{query}“.",
   "requestWithSeerr": "Mit Seerr anfragen",
   "couldNotLoadDetails": "Details konnten nicht geladen werden: {error}",

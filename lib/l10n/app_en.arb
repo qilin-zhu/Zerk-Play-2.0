@@ -690,7 +690,7 @@
   "unwatched": "Unwatched",
   "favorites": "Favorites",
   "nothingWithFilters": "Nothing here with these filters.",
-  "searchHint": "Movies, shows, episodes…",
+  "searchHint": "Movies, shows…",
   "noResultsFor": "No results for \"{query}\".",
   "@noResultsFor": {
     "placeholders": {

@@ -366,7 +366,7 @@
   "unwatched": "未看",
   "favorites": "收藏",
   "nothingWithFilters": "没有符合筛选条件的内容。",
-  "searchHint": "电影、剧集、单集…",
+  "searchHint": "电影、剧集…",
   "noResultsFor": "没有找到「{query}」的结果。",
   "requestWithSeerr": "通过 Seerr 请求",
   "couldNotLoadDetails": "无法加载详情：{error}",

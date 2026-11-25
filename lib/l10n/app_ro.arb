@@ -330,7 +330,7 @@
   "unwatched": "Nevizionate",
   "favorites": "Favorite",
   "nothingWithFilters": "Nimic cu aceste filtre.",
-  "searchHint": "Filme, seriale, episoade…",
+  "searchHint": "Filme, seriale…",
   "noResultsFor": "Niciun rezultat pentru „{query}”.",
   "requestWithSeerr": "Cere prin Seerr",
   "couldNotLoadDetails": "Detaliile nu au putut fi încărcate: {error}",
