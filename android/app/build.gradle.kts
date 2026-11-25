@@ -41,7 +41,12 @@ android {
 
     defaultConfig {
         applicationId = if (playStore) "com.zerkplay" else "cloud.zerk.play"
-        minSdk = 24
+        // Android 6.0. The Flutter engine itself declares minSdk 24 (Flutter
+        // 3.35 raised it from 21), so this is opt-in territory: see the
+        // tools:overrideLibrary note in AndroidManifest.xml. Every native
+        // dependency we ship (media3 1.9.4, the Jellyfin ffmpeg decoder,
+        // tvprovider) is fine at 23 - the engine is the only one above it.
+        minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

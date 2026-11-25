@@ -1,4 +1,12 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Android 6.0 support is opt-in: the Flutter engine (3.35+) declares
+         minSdkVersion 24 in flutter_embedding_release, so the manifest merger
+         refuses an app below that unless the library check is overridden.
+         Flutter lists API 23 as unsupported, so treat this build as a
+         best-effort fallback for old TV boxes, not as a supported target. -->
+    <uses-sdk tools:overrideLibrary="io.flutter.embedding" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
