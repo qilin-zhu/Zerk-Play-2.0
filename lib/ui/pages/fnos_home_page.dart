@@ -19,6 +19,7 @@ import '../focus/tv_focusable.dart';
 import '../theme/tokens.dart';
 import '../widgets/backdrop.dart';
 import '../widgets/common.dart';
+import '../widgets/hero_ambience.dart';
 import '../widgets/media_row.dart';
 import '../widgets/net_image.dart';
 import 'hero.dart' show HeroInfo, HeroPanel, formatRuntime;
@@ -59,13 +60,6 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   /// Cap for the gradient that dissolves the poster's bottom edge into the page
   /// background (shorter posters use a proportionally shorter fade).
   static const _maxFade = 320.0;
-
-  static const _bottomFade = LinearGradient(
-    begin: Alignment.bottomCenter,
-    end: Alignment.topCenter,
-    stops: [0.0, 0.35, 0.7, 1.0],
-    colors: [Zc.background, Color(0xCC0B0B12), Color(0x550B0B12), Color(0x000B0B12)],
-  );
 
   List<FnOsItem> _resume = const [];
 
@@ -557,7 +551,22 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       canRequestFocus: false,
       skipTraversal: true,
       onKeyEvent: _pageKeys,
-      child: Stack(children: [
+      child: ColoredBox(
+        // Below the poster the rows sit on plain background, and that has to be
+        // painted even while they load — the ambience layer is only a tint of it.
+        color: Zc.background,
+        child: Stack(fit: StackFit.expand, children: [
+      // Ambience layer (bottom): the artwork that is on the poster right now,
+      // blurred and stretched behind the whole page, exactly like the Emby home.
+      // Without it everything under the poster was flat black, which is what the
+      // poster's own dissolve ended in: the page never picked up the artwork's
+      // colour, so the carousel only ever changed the top of the screen.
+      Positioned.fill(
+        child: ValueListenableBuilder<Uri?>(
+          valueListenable: _heroImage,
+          builder: (_, url, _) => HeroAmbience(url: url, headers: _imageHeaders(_client)),
+        ),
+      ),
       // Poster layer (bottom): pinned and full-bleed, cropped from the bottom as
       // the page scrolls.
       Positioned(
@@ -711,7 +720,8 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
           right: 120,
           child: _message(l10n.fnosEmpty, l10n.tryAgain, _reload),
         ),
-      ]),
+        ]),
+      ),
     );
   }
 
@@ -842,22 +852,42 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
 
   /// `h` is the current poster height, `c` the collapse progress. The image is
   /// laid out at the full height and top-anchored, so [ClipRect] crops it from
-  /// the bottom as the page scrolls; a gradient then dissolves the cut edge into
-  /// the page background instead of ending on a hard line.
+  /// the bottom as the page scrolls.
+  ///
+  /// The dissolve is a mask on the artwork itself (`BlendMode.dstIn`), not a
+  /// sheet of background colour painted over it. A painted sheet can only end in
+  /// the one colour it was painted with, so the artwork faded into flat
+  /// `Zc.background` while the page behind it carried the artwork's own tint —
+  /// the carousel changed the top of the screen and nothing else. Masking to
+  /// transparent lets the ambience show through, so the poster and the page are
+  /// one continuous surface and the artwork colours the whole screen.
   Widget _heroPoster(double h, double c, Widget image, Widget panel) {
     final fadeOut = (1 - c * 1.7).clamp(0.0, 1.0);
     final fadeH = min(_maxFade, h * 0.62);
+    // Recomputed per frame: scrolling shortens the artwork, and the fade has to
+    // stay anchored to the edge that is on screen.
+    final fade = heroFadeMask(height: h, fadeHeight: fadeH);
     return SizedBox(
       height: h,
       child: ClipRect(
         child: Stack(fit: StackFit.expand, children: [
-          Positioned(left: 0, right: 0, top: 0, height: _fullH, child: image),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: fadeH,
-            child: const IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(gradient: _bottomFade))),
+          Positioned.fill(
+            // The mask is a saveLayer, and a saveLayer whose bottom edge lands on
+            // the visible cut can leave a one-pixel row of its own. Two extra
+            // pixels hang below the clip, so the layer's edge is outside the
+            // picture and only a plain clip is left at the cut.
+            child: OverflowBox(
+              alignment: Alignment.topCenter,
+              minHeight: h + 2,
+              maxHeight: h + 2,
+              child: ShaderMask(
+                blendMode: BlendMode.dstIn,
+                shaderCallback: (rect) => fade.createShader(rect),
+                child: Stack(fit: StackFit.expand, children: [
+                  Positioned(left: 0, right: 0, top: 0, height: _fullH, child: image),
+                ]),
+              ),
+            ),
           ),
           // Info overlaid on the poster's bottom-left, above the overlapping row.
           // `contentLeft` keeps it aligned with the row titles and cards; the

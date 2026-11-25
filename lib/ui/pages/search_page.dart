@@ -5,11 +5,11 @@ import 'package:flutter/material.dart';
 import '../../app/app_services.dart';
 import '../../core/emby/models/emby_item.dart';
 import '../../core/host.dart';
+import '../../core/log/app_log.dart';
 import '../../data/catalog_api.dart';
 import '../../data/recommendations.dart';
 import '../../data/seerr_api.dart';
 import '../../l10n/l10n.dart';
-import '../core/playback_launcher.dart';
 import '../focus/focus_zone.dart';
 import '../theme/tokens.dart';
 import '../widgets/cards.dart';
@@ -29,10 +29,25 @@ class _SearchPageState extends State<SearchPage> {
   final _field = FocusNode(debugLabel: 'search-field');
   Timer? _debounce;
   String _query = '';
+
+  /// Newest search wins: every part of a search carries the token it started
+  /// with, and only the current one is allowed to write into the page.
+  int _token = 0;
+
+  /// Parts of the current search still running, so the spinner ends with the
+  /// last of them instead of guessing.
+  int _parts = 0;
   bool _searching = false;
+
+  /// One library query at a time. A slow Emby answers a `SearchTerm` in tens of
+  /// seconds, and the old code fired one per keystroke *and* one per type; the
+  /// queue that made is what turned a search into a wait. Now the newest term
+  /// waits for the running one and then runs alone.
+  bool _inflight = false;
+  String? _queued;
+
   List<EmbyItem> _movies = const [];
   List<EmbyItem> _shows = const [];
-  List<EmbyItem> _episodes = const [];
   List<EmbyItem> _collections = const [];
   List<SeerrMedia> _requestable = const [];
 
@@ -49,60 +64,122 @@ class _SearchPageState extends State<SearchPage> {
     _debounce = Timer(const Duration(milliseconds: 350), () => _search(text.trim()));
   }
 
+  void _partDone(int token, [VoidCallback? write]) {
+    if (!mounted || token != _token) return;
+    setState(() {
+      write?.call();
+      _parts = _parts > 0 ? _parts - 1 : 0;
+      _searching = _parts > 0;
+    });
+  }
+
   Future<void> _search(String q) async {
     if (q == _query) return;
     _query = q;
+    final token = ++_token;
     if (q.length < 2) {
       setState(() {
-        _movies = _shows = _episodes = _collections = const [];
+        _movies = _shows = _collections = const [];
         _requestable = const [];
+        _parts = 0;
+        _searching = false;
       });
       return;
     }
-    setState(() => _searching = true);
     final s = AppServicesScope.read(context);
     final c = s.catalog;
+    // Seerr/TMDB only adds rows on top of the library hits, so it never blocks
+    // them: it runs beside them and writes its rows when it lands.
     final external = s.tmdb == null && s.seerr == null
         ? null
         : s.recommender.search(q).then(s.recommender.resolve).then<MixedItems?>((v) => v, onError: (Object e) {
             debugPrint('[search] TMDB / *seerr: $e');
             return null;
           });
-    final results = await Future.wait([
-      c.query(searchTerm: q, types: ['Movie'], limit: 30, sortBy: 'SortName').then((p) => p.items).catchError((_) => <EmbyItem>[]),
-      c.query(searchTerm: q, types: ['Series'], limit: 30, sortBy: 'SortName').then((p) => p.items).catchError((_) => <EmbyItem>[]),
-      c.query(searchTerm: q, types: ['Episode'], limit: 30, sortBy: 'SortName').then((p) => p.items).catchError((_) => <EmbyItem>[]),
-      _matchingCollections(c, q),
-    ]);
-    final movies = [...results[0]], shows = [...results[1]];
-    if (!mounted || q != _query) return;
     setState(() {
+      _parts = 1 + 1 + (external == null ? 0 : 1);
+      _searching = true;
+    });
+    unawaited(_library(c, q, token));
+    unawaited(_collectionHits(c, q, token));
+    if (external != null) unawaited(_external(s, external, token));
+  }
+
+  /// Every library hit in a single request. It used to be three (Movie, Series
+  /// and **Episode**) sent in parallel and joined by `Future.wait`, so the page
+  /// showed nothing until the slowest one — the episode search, the most
+  /// expensive of the three, since it scans every episode title in the library
+  /// — came back. Split by type on this side instead: one round trip, and the
+  /// rows are up as soon as it lands.
+  Future<void> _library(CatalogApi c, String q, int token) async {
+    if (_inflight) {
+      _queued = q;
+      return;
+    }
+    _inflight = true;
+    var term = q;
+    try {
+      while (true) {
+        final attempt = _token;
+        final started = DateTime.now();
+        var items = const <EmbyItem>[];
+        try {
+          final page = await c
+              .query(types: const ['Movie', 'Series'], searchTerm: term, limit: 40, sortBy: 'SortName')
+              .timeout(const Duration(seconds: 30));
+          items = page.items;
+        } catch (e) {
+          debugPrint('[search] library "$term": $e');
+        }
+        final ms = DateTime.now().difference(started).inMilliseconds;
+        AppLog.write('[search] "$term" -> ${items.length} library hits in $ms ms');
+        if (mounted && (attempt == _token || term == _query)) {
+          _partDone(attempt, () {
+            final movies = [for (final i in items) if (!i.isSeries) i];
+            final shows = [for (final i in items) if (i.isSeries) i];
+            if (term == _query) {
+              _movies = movies;
+              _shows = shows;
+            }
+          });
+        }
+        final next = _queued;
+        _queued = null;
+        if (next == null || next == term) break;
+        term = next;
+      }
+    } finally {
+      _inflight = false;
+    }
+  }
+
+  Future<void> _collectionHits(CatalogApi c, String q, int token) async {
+    final collections = await _matchingCollections(c, q);
+    _partDone(token, () {
+      if (q == _query) _collections = collections;
+    });
+  }
+
+  Future<void> _external(AppServices s, Future<MixedItems?> external, int token) async {
+    final resolved = await external ?? const [];
+    _partDone(token, () {
+      if (token != _token) return;
+      final have = {for (final i in [..._movies, ..._shows]) i.id};
+      final owned = {for (final i in [..._movies, ..._shows]) ?i.tmdbId};
+      final movies = [..._movies];
+      final shows = [..._shows];
+      for (final item in resolved.whereType<EmbyItem>()) {
+        if (!have.add(item.id)) continue;
+        (item.isSeries ? shows : movies).add(item);
+      }
       _movies = movies;
       _shows = shows;
-      _episodes = results[2];
-      _collections = results[3];
-      _requestable = const [];
-      _searching = external != null;
-    });
-    if (external == null) return;
-    final resolved = await external ?? const [];
-    if (!mounted || q != _query) return;
-    final have = {for (final i in [...movies, ...shows]) i.id};
-    final owned = {for (final i in [...movies, ...shows]) ?i.tmdbId};
-    for (final item in resolved.whereType<EmbyItem>()) {
-      if (!have.add(item.id)) continue;
-      (item.isSeries ? shows : movies).add(item);
-    }
-    setState(() {
-      _movies = [...movies];
-      _shows = [...shows];
       _requestable = s.seerr == null
           ? const []
           : [
               for (final m in resolved.whereType<SeerrMedia>())
                 if (!m.availability.isOnServer && !owned.contains(m.tmdbId)) m,
             ];
-      _searching = false;
     });
   }
 
@@ -129,7 +206,7 @@ class _SearchPageState extends State<SearchPage> {
   @override
   Widget build(BuildContext context) {
     final nothing = _query.length >= 2 && !_searching && _movies.isEmpty && _shows.isEmpty &&
-        _episodes.isEmpty && _collections.isEmpty && _requestable.isEmpty;
+        _collections.isEmpty && _requestable.isEmpty;
     return ListView(
       padding: const EdgeInsets.only(top: 70, bottom: 140),
       children: [
@@ -188,28 +265,6 @@ class _SearchPageState extends State<SearchPage> {
         if (_movies.isNotEmpty) _posterRow(context.l10n.movies, _movies),
         if (_shows.isNotEmpty) _posterRow(context.l10n.shows, _shows),
         if (_collections.isNotEmpty) _posterRow(context.l10n.collections, _collections),
-        if (_episodes.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: Zs.rowGap),
-            child: MediaRow(
-              title: context.l10n.episodes,
-              height: Zs.landscapeWidth * 9 / 16 + 90,
-              itemCount: _episodes.length,
-              itemBuilder: (context, i) {
-                final e = _episodes[i];
-                return Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: LandscapeCard(
-                    item: e,
-                    title: e.seriesName ?? e.name,
-                    subtitle: [e.episodeCode, e.name].whereType<String>().join('  '),
-                    onSelect: () => openItem(context, e),
-                    onPlay: () => playItem(context, e),
-                  ),
-                );
-              },
-            ),
-          ),
         if (_requestable.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: Zs.rowGap),
