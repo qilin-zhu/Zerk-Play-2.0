@@ -184,9 +184,12 @@ jobs:
 
           bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           for f in "$a32" "$uni"; do
-            sig=$("$bt/apksigner" verify --print-certs "$f" 2>&1)
+            # --verbose is what prints the per-scheme result; without it
+            # apksigner only reports "verified".
+            sig=$("$bt/apksigner" verify --verbose --print-certs "$f" 2>&1)
             if ! echo "$sig" | grep -q 'Verified using v1 scheme (JAR signing): true'; then
               echo "$f has no v1 signature, Android 6.0 will refuse it" >&2
+              echo "$sig" | grep -i 'verified using' >&2 || true
               exit 1
             fi
             digest=$(echo "$sig" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
