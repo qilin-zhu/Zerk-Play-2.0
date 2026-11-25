@@ -24,6 +24,7 @@ import '../widgets/backdrop.dart';
 import '../widgets/cards.dart';
 import '../widgets/cinema_loader.dart';
 import '../widgets/common.dart';
+import '../widgets/hero_ambience.dart';
 import '../widgets/media_row.dart';
 import '../widgets/net_image.dart';
 import '../widgets/rows_scroll_view.dart';
@@ -128,11 +129,18 @@ class _HomePageState extends State<HomePage> {
   static const _maxFade = 320.0;
   static const _heroFocusH = 44.0;
   static const _arrowLeft = 88.0;
+  /// Dissolves the poster's bottom edge into the page.
+  ///
+  /// The first two stops are the same colour on purpose: the last few percent of
+  /// the hero are then painted *fully* opaque, whatever fraction of a pixel the
+  /// layer happens to end on. With a single stop at 0 the last visible pixel row
+  /// was a partially covered blend of the raw artwork, which showed up as a
+  /// one-pixel bright line under the poster in windowed mode.
   static const _bottomFade = LinearGradient(
     begin: Alignment.bottomCenter,
     end: Alignment.topCenter,
-    stops: [0.0, 0.35, 0.7, 1.0],
-    colors: [Zc.background, Color(0xCC0B0B12), Color(0x550B0B12), Color(0x000B0B12)],
+    stops: [0.0, 0.06, 0.35, 0.7, 1.0],
+    colors: [Zc.background, Zc.background, Color(0xCC0B0B12), Color(0x550B0B12), Color(0x000B0B12)],
   );
   List<_Row>? _rows;
   final _data = <_Row, Future<MixedItems>>{};
@@ -887,7 +895,16 @@ class _HomePageState extends State<HomePage> {
         // a loose constraint, so the stack must claim the whole viewport itself
         // instead of sizing off its children.
         child: Stack(fit: StackFit.expand, children: [
-          // Poster layer (bottom): pinned and full-bleed.
+          // Ambience layer (bottom): the artwork currently on the hero, blurred
+          // and stretched behind the whole page. Without it everything below the
+          // poster was flat black, which read as a hard cut under the artwork.
+          Positioned.fill(
+            child: ValueListenableBuilder<HeroInfo?>(
+              valueListenable: _hero,
+              builder: (_, info, _) => HeroAmbience(url: info?.backdrop),
+            ),
+          ),
+          // Poster layer: pinned and full-bleed.
           Positioned(
             left: 0,
             top: 0,
@@ -1033,8 +1050,11 @@ class _HomePageState extends State<HomePage> {
           Positioned(
             left: 0,
             right: 0,
-            bottom: 0,
-            height: fadeH,
+            // Four pixels past the clip: the fade has to end *outside* the
+            // visible area, otherwise the row it ends inside keeps a sliver of
+            // the raw artwork (the bright hairline under the poster).
+            bottom: -4,
+            height: fadeH + 6,
             child: const IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(gradient: _bottomFade))),
           ),
           Positioned(
