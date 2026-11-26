@@ -82,8 +82,8 @@ Future<PlaybackOutcome?> playItem(
         services.updateSettings(services.settings.copyWith(versionPreferences: prefs));
       },
     );
-    // 语音控制 / hub 上报从这里拿到「当前在放什么、怎么暂停跳转」。
-    PlaybackBus.attach(player, full);
+    // 语音控制 / hub 上报从这里拿到「当前在放什么、怎么暂停跳转、怎么切集退出」。
+    PlaybackBus.attach(player, full, commands: session);
     try {
       final reason = await session.run(PlaybackRequest(
         full,

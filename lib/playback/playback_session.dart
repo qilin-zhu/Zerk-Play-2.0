@@ -12,6 +12,7 @@ import 'emby_playback_api.dart';
 import 'kept_display.dart';
 import 'language.dart';
 import 'player_backend.dart';
+import 'playback_bus.dart';
 import 'player_settings.dart';
 import 'subtitle_style.dart';
 import 'sync/together_sync.dart';
@@ -58,7 +59,7 @@ final class _Current {
   MediaSourceInfo get source => stream.source;
 }
 
-final class PlaybackSession {
+final class PlaybackSession implements PlaybackCommands {
   PlaybackSession({
     required this._player,
     required this._api,
@@ -531,6 +532,36 @@ final class PlaybackSession {
       debugPrint('[session] next episode lookup failed: $e');
     });
   }
+
+  // ---- 外部控制（语音遥控 / hub 控制台）----
+  //
+  // 这几个动作在 UI 上是 OSD 面板点出来的，面板把名字经 script-message 回传，
+  // 走到 _onOsdEvent。外部调用没有面板，所以直接喊这里，语义完全一样。
+
+  @override
+  EmbyItem? get playingItem => _current?.item;
+
+  @override
+  Future<void> nextEpisode() async {
+    if (_nextEpisode == null) {
+      // 面板还没拿到下集（片头刚起、或预取失败），临时补一次。
+      final cur = _current;
+      if (cur == null) return;
+      try {
+        final next = await _api.nextEpisode(cur.item);
+        if (next == null) return;
+        _nextEpisode = await localize?.call(next) ?? next;
+      } catch (e) {
+        debugPrint('[session] next lookup failed: $e');
+        return;
+      }
+      if (_current?.item.id != cur.item.id) return; // 期间已经切走了
+    }
+    await _playNext();
+  }
+
+  @override
+  Future<void> exitPlayback() => _finish(PlaybackEndReason.userExit);
 
   Future<void> _playNext() async {
     final next = _nextEpisode;

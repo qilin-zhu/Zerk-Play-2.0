@@ -51,6 +51,7 @@ final class PlaybackBus {
 
   static PlayerBackend? _player;
   static EmbyItem? _item;
+  static PlaybackCommands? _commands;
   static StreamSubscription<PlayerEvent>? _events;
   static VoidCallback? _stateListener;
 
@@ -61,12 +62,13 @@ final class PlaybackBus {
 
   static PlayerBackend? get player => _player;
 
-  static EmbyItem? get item => _item;
+  static EmbyItem? get item => _commands?.playingItem ?? _item;
 
-  static void attach(PlayerBackend player, EmbyItem item) {
+  static void attach(PlayerBackend player, EmbyItem item, {PlaybackCommands? commands}) {
     detach();
     _player = player;
     _item = item;
+    _commands = commands;
     void listener() => publish();
     _stateListener = listener;
     player.state.addListener(listener);
@@ -76,7 +78,7 @@ final class PlaybackBus {
     publish();
   }
 
-  /// 只注销自己那一台：上一个播放会话晚于新的注销时不能把新会话清掉。
+  /// 只在「自己能作数」时才清：上一个播放会话晚于新的注销时不能把新会话清掉。
   static void detach([PlayerBackend? only]) {
     final p = _player;
     if (p == null) return;
@@ -88,12 +90,13 @@ final class PlaybackBus {
     _stateListener = null;
     _player = null;
     _item = null;
+    _commands = null;
     current.value = null;
   }
 
   static void publish() {
     final p = _player;
-    final it = _item;
+    final it = _commands?.playingItem ?? _item;
     if (p == null || it == null) return;
     final s = p.state.value;
     current.value = PlaybackSnapshot(
@@ -134,18 +137,18 @@ final class PlaybackBus {
     return true;
   }
 
-  /// 退出播放：走 session 自己的 back 事件，和按遥控器返回键等价。
+  /// 退出播放：走会话自己的 userExit 收尾，和按遥控器返回键等价。
   static bool stop() {
-    final p = _player;
-    if (p == null) return false;
-    p.osd('back', null);
+    final c = _commands;
+    if (c == null || _player == null) return false;
+    unawaited(c.exitPlayback());
     return true;
   }
 
   static bool next() {
-    final p = _player;
-    if (p == null) return false;
-    p.osd('next', null);
+    final c = _commands;
+    if (c == null || _player == null) return false;
+    unawaited(c.nextEpisode());
     return true;
   }
 
@@ -186,6 +189,24 @@ final class PlaybackBus {
     }
     return false;
   }
+}
+
+/// 播放会话能做的事，播放器后端看不到的那几件。
+///
+/// 「下一集」和「退出」不是 [PlayerBackend] 的操作：后端的 `osd()` 只负责把
+/// 内容推给 mpv 的 Lua 面板，事件是从面板经 script-message 回到 Dart 的
+/// `PlayerOsdEvent`，再由 [PlaybackSession] 处置。所以从外部触发这两个动作，
+/// 必须直接喊会话，不能往 `osd()` 里塞一个 'next' —— 那只会让面板显示一张
+/// 空的下集卡片，什么都不会发生。
+abstract interface class PlaybackCommands {
+  /// 会话当前真正在放的那一条（切集后会变），用来让上报跟着更新。
+  EmbyItem? get playingItem;
+
+  /// 等价于点 OSD 上的「下一集」。没有下一集时是空操作。
+  Future<void> nextEpisode();
+
+  /// 等价于按遥控器返回键，走 userExit 收尾。
+  Future<void> exitPlayback();
 }
 
 /// 后端可选能力：能直接改音量。mpv 有，Media3 走系统音量，暂不实现。
