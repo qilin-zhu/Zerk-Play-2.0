@@ -1,29 +1,48 @@
-"""Rewrite the minSdkVersion inside an APK's binary AndroidManifest.xml.
+"""Make a Flutter APK claim, and actually work at, minSdkVersion 23 (Android 6.0).
 
-Why this exists: Flutter 3.35 raised the engine's own minSdkVersion to 24, and
-the manifest merger takes the maximum across all libraries, so
-`tools:overrideLibrary` does not help - the packaged APK still says 24 and
-Android 6.0 refuses to install it. Editing the built manifest is the only way
-to reach API 23 without rebuilding the engine.
+Two separate problems, both handled here:
 
-The patch is an in-place overwrite of the attribute's 4-byte integer value, so
-no offsets or string-pool indices move. The APK must be re-aligned and re-signed
-afterwards (the signature no longer matches once the manifest changes), and the
-re-sign has to declare --min-sdk-version 23 so a v1 (JAR) signature is added -
-API 23 cannot verify v2-only signatures.
+1. The manifest. Flutter 3.35 raised the engine's minSdkVersion to 24 and the
+   manifest merger takes the maximum across all libraries, so `tools:overrideLibrary`
+   does not help - the packaged APK still says 24 and Android 6.0 refuses to
+   install it. The attribute is a 4-byte integer, so it is overwritten in place
+   and no offsets move.
+
+2. The engine itself. libflutter.so imports `pthread_setname_np`, which bionic
+   only gained in API 24. Bionic binds eagerly (there is no lazy PLT), so
+   System.loadLibrary("flutter") fails with
+       dlopen failed: cannot locate symbol "pthread_setname_np"
+   and the process dies before the first frame - the app installs and then
+   closes instantly. The import is redirected to `pthread_self`, which exists
+   on every Android release and ignores the two arguments the engine passes, so
+   the call becomes a harmless no-op. The only thing lost is thread names on
+   API 23 (they show up in logs and the profiler).
+
+The APK must be re-aligned and re-signed afterwards: both edits invalidate the
+signature, and the re-sign has to declare --min-sdk-version 23 so a v1 (JAR)
+signature is added - API 23 cannot verify v2-only signatures.
 
 Usage:
-    python tools/patch_apk_minsdk.py in.apk out.apk 23
+    python3 tools/patch_apk_minsdk.py in.apk out.apk 23
 """
 import struct
 import sys
 import zipfile
+
+from elf_symbols import Elf
 
 RES_XML_TYPE = 0x0003
 RES_STRING_POOL_TYPE = 0x0001
 RES_XML_START_ELEMENT_TYPE = 0x0102
 TYPE_INT_DEC = 0x10
 MANIFEST = 'AndroidManifest.xml'
+
+# libc symbols newer than API 23 that a shipped .so must not import, mapped to
+# the always-available symbol that replaces them.
+LATE_LIBC = {
+    'pthread_setname_np': 'pthread_self',
+    'pthread_getname_np': 'pthread_self',
+}
 
 
 class StringPool:
@@ -98,23 +117,42 @@ def patch_manifest(data, new_min_sdk):
     return patched
 
 
+def patch_native(raw):
+    """Redirect late libc imports; returns a list of human-readable changes."""
+    try:
+        elf = Elf(bytearray(raw))
+    except ValueError:
+        # No dynamic symbol table means nothing can be imported; leave it be.
+        return raw, []
+    changes = []
+    for name, replacement in LATE_LIBC.items():
+        if not any(n == name for n, _b in elf.imports()):
+            continue
+        count = elf.rename_import(name, replacement)
+        changes.append('%s -> %s (%d)' % (name, replacement, count))
+    return bytes(elf.data), changes
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
     src, dst, new_min_sdk = sys.argv[1], sys.argv[2], int(sys.argv[3])
 
-    with zipfile.ZipFile(src) as zin:
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, 'w') as zout:
         manifest = bytearray(zin.read(MANIFEST))
         changes = patch_manifest(manifest, new_min_sdk)
         print('patched minSdkVersion %d -> %d' % (changes[0][0], new_min_sdk))
-        with zipfile.ZipFile(dst, 'w') as zout:
-            for item in zin.infolist():
-                raw = bytes(manifest) if item.filename == MANIFEST else zin.read(item.filename)
-                info = zipfile.ZipInfo(item.filename, date_time=item.date_time)
-                info.compress_type = item.compress_type
-                info.external_attr = item.external_attr
-                info.create_system = item.create_system
-                zout.writestr(info, raw)
+        for item in zin.infolist():
+            raw = bytes(manifest) if item.filename == MANIFEST else zin.read(item.filename)
+            if item.filename.endswith('.so'):
+                raw, done = patch_native(raw)
+                for line in done:
+                    print('  %s: %s' % (item.filename, line))
+            info = zipfile.ZipInfo(item.filename, date_time=item.date_time)
+            info.compress_type = item.compress_type
+            info.external_attr = item.external_attr
+            info.create_system = item.create_system
+            zout.writestr(info, raw)
     print('wrote %s' % dst)
 
 

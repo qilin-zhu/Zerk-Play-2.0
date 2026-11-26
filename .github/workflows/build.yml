@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.14'
+  APP_VERSION: '2.10.15'
 
 # The release job pushes a tag and uploads assets.
 permissions:
@@ -98,6 +98,9 @@ jobs:
       # changing the manifest invalidates the signature, and --min-sdk-version
       # 23 is what makes apksigner add a v1 (JAR) signature - API 23 cannot
       # verify v2-only signatures.
+      # The same pass redirects libflutter.so's pthread_setname_np import (a
+      # bionic symbol from API 24) to pthread_self, otherwise the library does
+      # not load at all and the app closes the moment it is opened.
       - name: Lower minSdk to 23 (Android 6.0)
         run: |
           set -e
@@ -181,6 +184,10 @@ jobs:
           else
             echo "aapt2 not found, skipping versionCode comparison"
           fi
+
+          # A native import that API 23's libc lacks makes the library fail to
+          # load, which looks exactly like "installs, then closes instantly".
+          python3 tools/check_so_api23.py "$a32" "$uni"
 
           bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           for f in "$a32" "$uni"; do

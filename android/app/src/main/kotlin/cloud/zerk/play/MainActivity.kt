@@ -21,7 +21,24 @@ class MainActivity : FlutterActivity() {
     override fun getRenderMode(): RenderMode = RenderMode.surface
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+        // On Android 6.0 the Flutter engine is out of its supported range, so
+        // the first frame can fail for reasons the Dart side never sees (a
+        // native symbol missing from bionic, for one). Showing it beats
+        // closing silently.
+        try {
+            super.onCreate(savedInstanceState)
+        } catch (t: Throwable) {
+            BootError.show(this, "Flutter 引擎启动失败（super.onCreate）", t)
+            return
+        }
+        try {
+            boot()
+        } catch (t: Throwable) {
+            BootError.show(this, "播放器初始化失败", t)
+        }
+    }
+
+    private fun boot() {
         val content = findViewById<FrameLayout>(android.R.id.content)
         videoLayer = FrameLayout(this).apply { visibility = android.view.View.GONE }
         content.addView(
