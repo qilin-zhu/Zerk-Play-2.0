@@ -19,6 +19,7 @@ import '../dialogue_downmix.dart';
 import '../display_refresh.dart';
 import '../media3/osd_model.dart';
 import '../player_backend.dart';
+import '../playback_bus.dart' show VolumeControl;
 import '../player_settings.dart';
 import '../trickplay.dart';
 import 'libmpv.dart' show MpvEndFileReason;
@@ -28,7 +29,7 @@ import 'video_host.dart';
 
 typedef _TrickFile = ({String path, int w, int h});
 
-final class MpvBackend implements PlayerBackend {
+final class MpvBackend implements PlayerBackend, VolumeControl {
   MpvBackend({
     required this._navigator,
     required this._settings,
@@ -236,6 +237,11 @@ final class MpvBackend implements PlayerBackend {
 
   @override
   void setPaused(bool paused) => _mpv.setProperty('pause', paused ? 'yes' : 'no');
+
+  /// 语音「音量 30」「声音大一点」落到这里。mpv 的 volume 是 0–100（上限由
+  /// volume-max 放到 150，这里始终传 0–100，避免一句话把耳朵震坏）。
+  @override
+  void setVolume(double volume) => _mpv.setProperty('volume', volume.clamp(0, 100).toStringAsFixed(0));
 
   @override
   void seek(Duration position) => _mpv.commandAsync(['seek', '${position.inMilliseconds / 1000}', 'absolute']);

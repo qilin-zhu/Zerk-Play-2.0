@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app/app_services.dart';
+import 'app/hub_control.dart';
+import 'app/hub_link.dart';
 import 'core/host.dart';
 import 'core/log/app_log.dart';
 import 'core/log/perf_bench.dart';
@@ -63,6 +65,17 @@ Future<void> main(List<String> args) async {
       trailerSmoke: args.contains('--trailer-smoke'),
     ),
   ));
+  // 语音控制通道：拿到同步码后开始轮询 hub 的指令队列。
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (HubLink.linked) HubControl.instance.start();
+    HubLink.changed.addListener(() {
+      if (HubLink.linked) {
+        HubControl.instance.restart();
+      } else {
+        HubControl.instance.stop();
+      }
+    });
+  });
 }
 
 /// Image cache housekeeping, in the background: forgets entries that are not

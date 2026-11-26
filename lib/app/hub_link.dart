@@ -205,6 +205,11 @@ abstract final class HubLink {
   static String? _address;
   static DateTime? _linkedAt;
 
+  /// Token for the control channel (poll commands / report playback). Minted
+  /// by the hub on link and kept with the cached config, so a restart does not
+  /// need a new redeem.
+  static String? _controlToken;
+
   static final changed = ValueNotifier<int>(0);
 
   static String? droppedMessage;
@@ -212,6 +217,18 @@ abstract final class HubLink {
   static HubConfig? get config => _config;
 
   static bool get linked => _config != null;
+
+  /// null 表示这台 hub 没有控制通道（旧版本），语音控制自动不启动。
+  static String? get controlToken => _controlToken;
+
+  static String? _readControlToken(Map config) {
+    final c = config['control'];
+    if (c is Map) {
+      final t = c['token'];
+      if (t is String && t.isNotEmpty) return t;
+    }
+    return null;
+  }
 
   static Uri? get base => _config?.base;
 
@@ -232,7 +249,10 @@ abstract final class HubLink {
       _hub = j['hub'] as String?;
       _linkedAt = DateTime.tryParse(j['linkedAt'] as String? ?? '');
       final config = j['config'];
-      if (config is Map<String, Object?>) _config = HubConfig(config);
+      if (config is Map<String, Object?>) {
+        _config = HubConfig(config);
+        _controlToken = _readControlToken(config);
+      }
     } catch (e) {
       debugPrint('[hub] stored link unreadable: $e');
     }
@@ -332,6 +352,7 @@ abstract final class HubLink {
     }
     debugPrint('[hub] link v2: ${config.servers.length} server(s), danmaku ${config.danmaku.sources.length}');
     _config = config;
+    _controlToken = _readControlToken(json);
     _code = code;
     _hub = target;
     _address = target;

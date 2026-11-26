@@ -4,6 +4,7 @@ import '../../app/app_services.dart';
 import '../../core/emby/models/emby_item.dart';
 import '../../l10n/l10n.dart';
 import '../../playback/live_session.dart';
+import '../../playback/playback_bus.dart';
 import '../../playback/platform_player.dart';
 import '../../playback/playback_session.dart';
 import '../../playback/player_settings.dart';
@@ -54,13 +55,14 @@ Future<PlaybackOutcome?> playItem(
     final full = target.mediaSources.isNotEmpty || target.isChannel ? target : await services.catalog.item(target.id);
     final settings = await PlayerSettings.load();
     final acceptBadCerts = services.settings.acceptInvalidCertificates;
+    final player = createPlayer(
+      navigator: navigator,
+      settings: settings,
+      acceptInvalidCertificates: acceptBadCerts,
+      l10n: l10n,
+    );
     final session = PlaybackSession(
-      player: createPlayer(
-        navigator: navigator,
-        settings: settings,
-        acceptInvalidCertificates: acceptBadCerts,
-        l10n: l10n,
-      ),
+      player: player,
       api: services.playback,
       artwork: (item) => (
         backdrop: services.catalog.backdrop(item),
@@ -80,15 +82,21 @@ Future<PlaybackOutcome?> playItem(
         services.updateSettings(services.settings.copyWith(versionPreferences: prefs));
       },
     );
-    final reason = await session.run(PlaybackRequest(
-      full,
-      start: start,
-      mediaSourceId: mediaSourceId,
-      audioIndex: audioIndex,
-      subtitleIndex: subtitleIndex,
-    ));
-    services.markLibraryChanged();
-    return PlaybackOutcome(reason, session.lastItem ?? full);
+    // 语音控制 / hub 上报从这里拿到「当前在放什么、怎么暂停跳转」。
+    PlaybackBus.attach(player, full);
+    try {
+      final reason = await session.run(PlaybackRequest(
+        full,
+        start: start,
+        mediaSourceId: mediaSourceId,
+        audioIndex: audioIndex,
+        subtitleIndex: subtitleIndex,
+      ));
+      services.markLibraryChanged();
+      return PlaybackOutcome(reason, session.lastItem ?? full);
+    } finally {
+      PlaybackBus.detach(player);
+    }
   } finally {
     _setPlaying(false);
   }
