@@ -694,12 +694,16 @@ class _RailState extends State<_Rail> {
         gradient: LinearGradient(
           begin: Alignment.centerLeft,
           end: Alignment.centerRight,
-          stops: const [0, 0.55, 1],
+          // Collapsed, the glyph column sits at roughly half the rail's 76 px
+          // width, so the scrim has to stay dark past 0.5 - otherwise the icons
+          // land on artwork that is already washed out to ~20% black and white
+          // glyphs disappear over a bright poster.
+          stops: expanded ? const [0, 0.55, 1] : const [0, 0.64, 1],
           colors: expanded
               ? const [Color(0xF20B0B12), Color(0xE00B0B12), Color(0x000B0B12)]
-              // Collapsed, the rail floats over the page: only a soft scrim so
-              // the artwork underneath stays visible instead of a solid bar.
-              : const [Color(0xA6000000), Color(0x38000000), Color(0x00000000)],
+              // A translucent scrim, never a solid bar: the artwork still reads
+              // through it, but the glyphs always have something dark to sit on.
+              : const [Color(0xBD000000), Color(0x70000000), Color(0x00000000)],
         ),
       ),
       padding: EdgeInsets.only(left: expanded ? 20 : 6, top: 48, bottom: 48),
@@ -878,9 +882,12 @@ class _RailItem extends StatelessWidget {
         reveal: false,
         onSelect: onSelect,
         builder: (context, focused) {
+          // Over artwork the glyph needs more than the global "faint" 45% white:
+          // white at that opacity is invisible against a bright poster, and the
+          // rail is the only navigation on screen.
           final fg = focused
               ? Zc.background
-              : (selected ? Colors.white : (child ? Zc.textMuted : Zc.textFaint));
+              : (selected ? Colors.white : (child ? Zc.textMuted : const Color(0xD9FFFFFF)));
           return AnimatedContainer(
             duration: Zm.fast,
             curve: Zm.curve,
@@ -890,9 +897,13 @@ class _RailItem extends StatelessWidget {
             decoration: BoxDecoration(
               color: focused
                   ? Colors.white
-                  : (selected && !expanded
-                        ? Colors.white.withValues(alpha: 0.10)
-                        : Colors.transparent),
+                  // The selected pill is a dark wash plus a hairline, so it reads
+                  // both ways: it dims against a bright poster and the outline
+                  // still shows on a dark one.
+                  : (selected && !expanded ? const Color(0x4D000000) : Colors.transparent),
+              border: selected && !expanded && !focused
+                  ? Border.all(color: const Color(0x3DFFFFFF))
+                  : null,
               borderRadius: BorderRadius.circular(30),
             ),
             clipBehavior: Clip.hardEdge,
@@ -1020,7 +1031,17 @@ class _RailGlyphState extends State<_RailGlyph> with SingleTickerProviderStateMi
         widget.icon,
         size: widget.size,
         color: widget.color,
-        shadows: widget.shadow ? const [Shadow(color: Color(0xB3000000), blurRadius: 12)] : null,
+        // A single wide blur leaves thin 2 px strokes with almost no outline -
+        // over a bright poster the glyph still washed out. Stacking a tight
+        // shadow under two progressively wider ones draws a dark edge that
+        // actually separates the stroke from the artwork.
+        shadows: widget.shadow
+            ? const [
+                Shadow(color: Color(0xE6000000), blurRadius: 3),
+                Shadow(color: Color(0xB3000000), blurRadius: 9),
+                Shadow(color: Color(0x80000000), blurRadius: 20),
+              ]
+            : null,
       ),
     );
   }
