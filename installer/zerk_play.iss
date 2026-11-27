@@ -2,7 +2,7 @@
 ; The CI overrides this with /DAppVersion=<version from pubspec>; the literal
 ; below is only the fallback for a local build.
 #ifndef AppVersion
-  #define AppVersion "2.10.25"
+  #define AppVersion "2.10.26"
 #endif
 #define AppExe "zerk_play.exe"
 #ifndef BuildDir

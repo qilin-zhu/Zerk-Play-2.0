@@ -340,11 +340,12 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       final total = first is Map ? (first['total'] as num?)?.toInt() ?? 0 : 0;
       final pages = max(1, (total / _slidePageSize).ceil());
       final lists = <List<Object?>>[_listOf(first)];
-      final picked = <int>{1};
       final rnd = Random.secure();
-      for (var i = 0; i < _slideExtraPages && pages > 1; i++) {
-        final page = 1 + rnd.nextInt(pages);
-        if (!picked.add(page)) continue;
+      // Distinct pages, not "roll twice and maybe hit the same one": drawing
+      // the last page twice used to leave the pool at 27 of 75 titles, because
+      // the second roll was thrown away instead of trying another page.
+      final others = [for (var page = 2; page <= pages; page++) page]..shuffle(rnd);
+      for (final page in others.take(_slideExtraPages)) {
         try {
           final more = _listOf(await client.itemList(pageSize: _slidePageSize, page: page, types: types));
           if (more.isNotEmpty) lists.add(more);
