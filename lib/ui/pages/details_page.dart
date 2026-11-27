@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app/app_services.dart';
@@ -309,6 +311,21 @@ class _DetailsPageState extends State<DetailsPage> {
     await _load(outcome.lastItem?.id ?? item.id);
   }
 
+  /// 剧集卡片上的圆钮：直接开播这一集。
+  ///
+  /// 正在播的那一集走 [_play]，和顶部的「继续播放」按钮同一条路，因此会带上
+  /// 当前选中的音轨、字幕和版本，并从上次的进度续播；其他集交给 playItem 用
+  /// 默认源起播，播完把页面切到实际播的那一集。
+  Future<void> _playEpisode(EmbyItem episode) async {
+    if (episode.id == _item?.id) {
+      await _play();
+      return;
+    }
+    final outcome = await playItem(context, episode);
+    if (!mounted || outcome == null) return;
+    await _load(outcome.lastItem?.id ?? episode.id);
+  }
+
   Future<void> _toggleWatched() async {
     final item = _item!;
     final s = AppServicesScope.read(context);
@@ -500,6 +517,10 @@ class _DetailsPageState extends State<DetailsPage> {
                     onSelect: () {
                       if (!current) Navigator.of(context).pushReplacement(detailsRoute(e));
                     },
+                    // 卡片中间的圆钮 = 直接播这一集。没传 onPlay 时它会回落到
+                    // onSelect，而 current 集的 onSelect 是空操作（上面那个 if），
+                    // 于是点「正在播放」的卡片完全没反应。
+                    onPlay: () => unawaited(_playEpisode(e)),
                   ),
                 );
               },

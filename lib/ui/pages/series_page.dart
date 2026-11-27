@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app/app_services.dart';
@@ -306,6 +308,9 @@ class _SeriesPageState extends State<SeriesPage> {
                       ].whereType<String>().join('  ·  '),
                       onSelect: () => _openEpisode(e),
                       onMenu: () => _playEpisode(e),
+                      // 圆钮直接开播这一集；不传的话它会回落到 onSelect，
+                      // 变成「点播放按钮只是换了个页面」。
+                      onPlay: () => unawaited(_playEpisode(e)),
                     ),
                   ),
                 );
