@@ -23,7 +23,8 @@ final class FnOsItem {
         voteAverage = raw['vote_average']?.toString(),
         watched = raw['watched']?.toString() == '1' || raw['is_watched']?.toString() == '1',
         ts = (raw['ts'] as num?)?.toInt(),
-        duration = (raw['duration'] as num?)?.toInt();
+        duration = (raw['duration'] as num?)?.toInt(),
+        runtime = (raw['runtime'] as num?)?.toInt();
 
   final String guid;
   final String title;
@@ -40,7 +41,13 @@ final class FnOsItem {
   final String? voteAverage;
   final bool watched;
   final int? ts;
+
+  /// Seconds, as `play/list` reports the watched position.
   final int? duration;
+
+  /// Minutes. `item/list` and `item/{guid}` both carry it, while `duration`
+  /// comes back as 0 for most movies - the hero's runtime line reads this one.
+  final int? runtime;
 
   /// trimemedia types are capitalized (`Movie`, `TV`, `Episode`, `Video`).
   String get kind => type.toLowerCase();

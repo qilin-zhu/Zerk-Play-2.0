@@ -92,12 +92,23 @@ class FnOsPosterCard extends StatelessWidget {
 /// circle that appears while the card has the focus), so the viewer always
 /// lands somewhere the resume position is visible before it starts.
 class FnOsResumeCard extends StatelessWidget {
-  const FnOsResumeCard({super.key, required this.item, required this.width, this.onFocus, this.onFocusOut});
+  const FnOsResumeCard({
+    super.key,
+    required this.item,
+    required this.width,
+    this.onFocus,
+    this.onFocusOut,
+    this.autofocus = false,
+  });
 
   final FnOsItem item;
   final double width;
   final VoidCallback? onFocus;
   final VoidCallback? onFocusOut;
+
+  /// Taken by the home page's first card, so the D-pad has somewhere to start
+  /// without the mouse.
+  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
@@ -106,6 +117,7 @@ class FnOsResumeCard extends StatelessWidget {
     final imageH = width * 0.5625;
     final l10n = context.l10n;
     return TvFocusable(
+      autofocus: autofocus,
       onFocusChange: (f) {
         if (f) {
           onFocus?.call();
