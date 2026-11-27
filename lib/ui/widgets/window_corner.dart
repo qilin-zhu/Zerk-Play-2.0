@@ -7,22 +7,19 @@ import 'wall_clock.dart';
 const double kWindowCornerWidth = 164;
 const double kWindowCornerHeight = 40;
 
-/// How much of the corner, measured from its right edge, answers to the pointer
-/// while the buttons are hidden.
+/// How much of the corner answers to the pointer while the buttons are hidden.
 ///
-/// Only the clock's own footprint: a pointer crossing the artwork in the corner
-/// should not pop three buttons over the poster.
+/// Not a width, a shape: the clock's own box (see `_WindowCornerState.build`).
+/// A pointer crossing the artwork in the corner should not pop three buttons
+/// over the poster, so the wake area must be the clock and nothing else — and
+/// it must be measured, not guessed. A fixed "rightmost N px" window looked
+/// right and was wrong: at 24 px the digits start left of the guess, so the
+/// left half of the time did nothing when hovered.
 ///
-/// The widget itself stays [kWindowCornerWidth] wide at all times, even though
-/// only this much of it notices the pointer. Shrinking the hover box instead
-/// would put the capsule's three 54 px buttons under a 100 px constraint (a
-/// RenderFlex overflow), and hovering the buttons would then take them out of
-/// the hit-test path below that box, rebuilding the clock and flickering.
-const double _clockHitWidth = 84;
-
-/// Left edge of the region that wakes the capsule, in corner-local coordinates.
-const double _clockHitLeft = kWindowCornerWidth - _clockHitWidth;
-
+/// The corner itself stays [kWindowCornerWidth] wide at all times. Shrinking
+/// the box instead would put the capsule's three 54 px buttons under a ~100 px
+/// constraint (a RenderFlex overflow), and the buttons would then fall out of
+/// the hit-test path below that box.
 const Duration _fade = Duration(milliseconds: 150);
 
 /// The top-right corner of the frameless window: a 24-hour clock that swaps
@@ -67,25 +64,18 @@ class _WindowCornerState extends State<WindowCorner> {
     setState(() => _revealed = on);
   }
 
-  /// The capsule wakes only over the clock; once awake it stays up anywhere in
-  /// the corner, so moving from the clock onto a glyph cannot dismiss it.
-  void _maybeReveal(Offset local) {
-    if (_revealed || local.dx < _clockHitLeft) return;
-    _set(true);
-  }
-
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: kWindowCornerWidth,
       height: kWindowCornerHeight,
       child: MouseRegion(
-        // The whole corner is the hover surface, but the left part of it is
-        // ignored for waking (see [_maybeReveal]) — that is the difference
-        // between "the clock is a target" and "a button pops up whenever the
-        // pointer crosses the artwork up here".
-        onEnter: (e) => _maybeReveal(e.localPosition),
-        onHover: (e) => _maybeReveal(e.localPosition),
+        // Only dismisses. Waking is the clock's own job (it knows where it is,
+        // the corner does not) — and this one must stay the ancestor of the
+        // capsule rather than a sibling of it: a hit test stops at the first
+        // child that takes the pointer, so a region below the buttons would
+        // leave the path the moment the pointer landed on a glyph, collapse
+        // the capsule under the cursor and flash.
         onExit: (_) => _set(false),
         child: Stack(
           alignment: Alignment.centerRight,
@@ -93,28 +83,35 @@ class _WindowCornerState extends State<WindowCorner> {
             // Plain clock, no plate behind it: the corner should read as
             // part of the artwork rather than as another floating box.
             Positioned.fill(
-              child: IgnorePointer(
-                child: AnimatedOpacity(
-                  opacity: _revealed || !widget.showClock ? 0 : 1,
-                  duration: _fade,
-                  curve: Curves.easeOut,
-                  // The chrome is mounted above the Navigator, so the ambient
-                  // text style here is `MaterialApp`'s fallback — monospace,
-                  // w900, with a double yellow underline ("put your text in a
-                  // Material"). Left alone, the clock inherits exactly that: the
-                  // two yellow lines under the digits were this, not a shadow.
-                  // A clean base style is cheaper than dragging a Material into
-                  // the corner just to reset its typography.
-                  child: const DefaultTextStyle(
-                    style: TextStyle(decoration: TextDecoration.none),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Padding(
-                        padding: EdgeInsets.only(right: 12),
-                        // Same widget, same shadow as the clock the player OSD
-                        // draws, so the corner does not change character between
-                        // the media wall and a video.
-                        child: WallClock(size: 24, shadow: true),
+              child: Align(
+                alignment: Alignment.centerRight,
+                // Align fills the corner but is not hit-testable itself, so the
+                // region below is exactly the glyphs — the wake area is measured
+                // by layout instead of guessed as "the rightmost N pixels".
+                child: MouseRegion(
+                  onEnter: (_) => _set(true),
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      opacity: _revealed || !widget.showClock ? 0 : 1,
+                      duration: _fade,
+                      curve: Curves.easeOut,
+                      // The chrome is mounted above the Navigator, so the
+                      // ambient text style here is `MaterialApp`'s fallback —
+                      // monospace, w900, with a double yellow underline ("put
+                      // your text in a Material"). Left alone the clock inherits
+                      // exactly that: the two yellow lines under the digits were
+                      // this, not a shadow. A clean base style is cheaper than
+                      // dragging a Material into the corner just to reset its
+                      // typography.
+                      child: const DefaultTextStyle(
+                        style: TextStyle(decoration: TextDecoration.none),
+                        child: Padding(
+                          padding: EdgeInsets.only(right: 12),
+                          // Same widget, same shadow as the clock the player OSD
+                          // draws, so the corner does not change character
+                          // between the media wall and a video.
+                          child: WallClock(size: 24, shadow: true),
+                        ),
                       ),
                     ),
                   ),

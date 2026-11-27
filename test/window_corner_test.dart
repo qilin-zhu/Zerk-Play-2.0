@@ -49,6 +49,9 @@ void main() {
   /// Centre of the capsule's rightmost glyph, in screen coordinates.
   Offset closeSpot(Rect corner) => Offset(corner.right - 27, corner.center.dy);
 
+  /// Somewhere on the digits themselves.
+  Offset clockSpot(Rect corner) => Offset(corner.right - 40, corner.center.dy);
+
   double opacityAround(WidgetTester tester, Finder child) {
     final f = find.ancestor(of: child, matching: find.byType(AnimatedOpacity));
     return tester.widget<AnimatedOpacity>(f.first).opacity;
@@ -110,11 +113,19 @@ void main() {
     await mouse.addPointer(location: Offset.zero);
     addTearDown(mouse.removePointer);
 
-    await mouse.moveTo(corner.center);
+    // Somewhere on the digits, not merely on the corner: that distinction is
+    // the whole point of the wake area being the clock's own box.
+    await mouse.moveTo(clockSpot(corner));
     await tester.pumpAndSettle();
     final clock = find.textContaining(RegExp(r'^\d{2}:\d{2}$'));
     expect(opacityAround(tester, clock), 0, reason: 'the clock makes way for the buttons');
     expect(opacityAround(tester, find.byIcon(Icons.close)), 1);
+
+    // Sliding from the clock onto a glyph must not drop the capsule: the
+    // buttons sit on top of the clock, so the clock loses the pointer there.
+    await mouse.moveTo(Offset(corner.left + 27, corner.center.dy));
+    await tester.pumpAndSettle();
+    expect(opacityAround(tester, find.byIcon(Icons.close)), 1, reason: 'stays up over the glyph');
 
     await tester.tapAt(closeSpot(corner));
     await tester.pumpAndSettle();
@@ -178,7 +189,7 @@ void main() {
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     addTearDown(mouse.removePointer);
-    await mouse.moveTo(corner.center);
+    await mouse.moveTo(clockSpot(corner));
     await tester.pumpAndSettle();
     await tester.tapAt(closeSpot(corner));
     await tester.pumpAndSettle();
