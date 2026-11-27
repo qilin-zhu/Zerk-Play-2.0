@@ -98,14 +98,24 @@ class _WindowCornerState extends State<WindowCorner> {
                   opacity: _revealed || !widget.showClock ? 0 : 1,
                   duration: _fade,
                   curve: Curves.easeOut,
-                  child: const Align(
-                    alignment: Alignment.centerRight,
-                    child: Padding(
-                      padding: EdgeInsets.only(right: 12),
-                      // Same widget, same shadow as the clock the player OSD
-                      // draws, so the corner does not change character between
-                      // the media wall and a video.
-                      child: WallClock(size: 18, shadow: true),
+                  // The chrome is mounted above the Navigator, so the ambient
+                  // text style here is `MaterialApp`'s fallback — monospace,
+                  // w900, with a double yellow underline ("put your text in a
+                  // Material"). Left alone, the clock inherits exactly that: the
+                  // two yellow lines under the digits were this, not a shadow.
+                  // A clean base style is cheaper than dragging a Material into
+                  // the corner just to reset its typography.
+                  child: const DefaultTextStyle(
+                    style: TextStyle(decoration: TextDecoration.none),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Padding(
+                        padding: EdgeInsets.only(right: 12),
+                        // Same widget, same shadow as the clock the player OSD
+                        // draws, so the corner does not change character between
+                        // the media wall and a video.
+                        child: WallClock(size: 24, shadow: true),
+                      ),
                     ),
                   ),
                 ),

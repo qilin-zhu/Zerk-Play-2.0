@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zerk_play/l10n/l10n.dart';
+import 'package:zerk_play/ui/widgets/wall_clock.dart';
 import 'package:zerk_play/ui/widgets/window_corner.dart';
 
 /// The corner rests as a 24-hour clock and only shows the window buttons while
@@ -25,19 +26,21 @@ void main() {
       locale: const Locale('zh'),
       supportedLocales: L10n.supportedLocales,
       localizationsDelegates: L10n.localizationsDelegates,
-      home: Scaffold(
-        body: Align(
-          alignment: Alignment.topRight,
-          child: WindowCorner(
-            maximized: false,
-            fullScreen: false,
-            showClock: showClock,
-            onMinimize: onMinimize,
-            onToggleMaximize: onToggleMaximize,
-            onClose: onClose,
-          ),
+      // Mounted the way the app does it — in `builder`, above the Navigator.
+      // There the ambient text style is MaterialApp's fallback (monospace,
+      // w900, double yellow underline), and a Scaffold here would hide that.
+      builder: (context, child) => Align(
+        alignment: Alignment.topRight,
+        child: WindowCorner(
+          maximized: false,
+          fullScreen: false,
+          showClock: showClock,
+          onMinimize: onMinimize,
+          onToggleMaximize: onToggleMaximize,
+          onClose: onClose,
         ),
       ),
+      home: const SizedBox.shrink(),
     ));
     await tester.pumpAndSettle();
     return tester.getRect(find.byType(WindowCorner));
@@ -69,6 +72,20 @@ void main() {
       '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
     );
     expect(opacityAround(tester, clock), 1);
+
+    // The style that actually reaches the paragraph: mounted above the
+    // Navigator, a bare Text inherits MaterialApp's fallback and comes out in
+    // monospace with a double yellow underline under the digits.
+    final ambient = DefaultTextStyle.of(tester.element(find.byType(WindowCorner))).style;
+    expect(ambient.fontFamily, 'monospace',
+        reason: 'the corner must be mounted where the app mounts it, above the Navigator');
+    final rich = tester.widget<RichText>(
+      find.descendant(of: find.byType(WallClock), matching: find.byType(RichText)),
+    );
+    final style = rich.text.style!;
+    expect(style.decoration, TextDecoration.none, reason: 'no underline, single or double');
+    expect(style.fontFamily, isNot('monospace'), reason: 'the corner is not a fallback text');
+    expect(style.fontSize, 24);
 
     // The capsule is still laid out (it has to fade out), but a click on it
     // must not reach a button.
