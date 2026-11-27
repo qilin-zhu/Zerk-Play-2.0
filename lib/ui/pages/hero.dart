@@ -97,6 +97,14 @@ class HeroPanel extends StatelessWidget {
         opacity: anim,
         child: SlideTransition(position: Tween(begin: const Offset(0.02, 0), end: Offset.zero).animate(anim), child: child),
       ),
+      // AnimatedSwitcher's default layout builder centres its children in a
+      // loose Stack, which pushed the 980-wide block into the middle of the
+      // poster whenever the slot was wider than that. The hero text has to hug
+      // its left edge, so the stack aligns to the start instead.
+      layoutBuilder: (current, previous) => Stack(
+        alignment: AlignmentDirectional.centerStart,
+        children: [...previous, ?current],
+      ),
       child: i == null
           ? const SizedBox.shrink()
           : SizedBox(

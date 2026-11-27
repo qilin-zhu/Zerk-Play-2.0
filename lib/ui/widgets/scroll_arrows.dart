@@ -10,12 +10,19 @@ class PointerScrollArrows extends StatefulWidget {
     required this.controller,
     required this.child,
     this.leftInset = 0,
+    this.arrowLeft,
   });
 
   final ScrollController controller;
   final Widget child;
 
   final double leftInset;
+
+  /// Left edge of the prev arrow. Defaults to sitting just left of the content
+  /// ([leftInset] - [_width]); pass a value to line the circle up with another
+  /// control instead. The home page pins it to the content edge so the row
+  /// arrows and the carousel arrows share one vertical line.
+  final double? arrowLeft;
 
   @override
   State<PointerScrollArrows> createState() => _PointerScrollArrowsState();
@@ -52,7 +59,7 @@ class _PointerScrollArrowsState extends State<PointerScrollArrows> {
             final canRight = show && c.position.pixels < c.position.maxScrollExtent - 1;
             return Stack(clipBehavior: Clip.none, children: [
               Positioned(
-                left: (widget.leftInset - _width).clamp(0.0, double.infinity),
+                left: (widget.arrowLeft ?? (widget.leftInset - _width)).clamp(0.0, double.infinity),
                 top: 0,
                 bottom: 0,
                 width: _width,

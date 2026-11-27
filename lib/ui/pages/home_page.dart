@@ -131,6 +131,11 @@ class _HomePageState extends State<HomePage> {
   /// list has to travel to bring that row into the slot.
   final _rowAnchors = <_Row, GlobalKey>{};
 
+  /// Focus zone of each row. Up/Down between rows is decided here by row
+  /// index, so the D-pad can never wander off to the side rail from a row that
+  /// has a neighbour above it.
+  final _rowZoneKeys = <_Row, GlobalKey>{};
+
   /// Title block of a row: 18 px bottom padding + the text line.
   static const _rowTitleH = 48.0;
 
@@ -140,6 +145,10 @@ class _HomePageState extends State<HomePage> {
   /// floating 70 px to their left, which used to leave the left circle
   /// stranded near the window edge.
   static const _arrowLeft = contentLeft;
+  static const _heroArrowSize = 52.0;
+  /// Left edge of the title block: right after the prev arrow, so the two read
+  /// as one group instead of having a band of empty artwork between them.
+  static const _heroTextLeft = _arrowLeft + _heroArrowSize + 14;
 
   List<_Row>? _rows;
   final _data = <_Row, Future<MixedItems>>{};
@@ -1105,7 +1114,13 @@ class _HomePageState extends State<HomePage> {
   void _moveRow(int delta) {
     final rows = _rows;
     if (rows == null || rows.isEmpty) return;
-    ZoneNavigator.move(delta > 0 ? TraversalDirection.down : TraversalDirection.up);
+    final active = _activeRowFor(rows);
+    var i = active + delta;
+    while (i >= 0 && i < rows.length && !_rowShows(rows[i])) {
+      i += delta;
+    }
+    if (i < 0 || i >= rows.length) return;
+    _focusRow(rows[i]);
   }
 
   /// Poster composition: the artwork is laid out at the full height and
@@ -1165,7 +1180,7 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           Positioned(
-            left: contentLeft,
+            left: _heroTextLeft,
             right: 220,
             bottom: _overlap + 22,
             child: Opacity(
@@ -1297,7 +1312,10 @@ class _HomePageState extends State<HomePage> {
             if (event is! KeyDownEvent) return KeyEventResult.ignored;
             final key = event.logicalKey;
             if (key == LogicalKeyboardKey.arrowDown) {
-              ZoneNavigator.move(TraversalDirection.down);
+              // Down from the poster enters the row that is on screen, by
+              // index - see [_pageKeys] for why geometry cannot be trusted.
+              final rows = _rows;
+              if (rows != null && rows.isNotEmpty) _focusRow(rows[_activeRowFor(rows)]);
               return KeyEventResult.handled;
             }
             // Left/Right switch what the poster shows, exactly like fnOS; the
@@ -1354,15 +1372,48 @@ class _HomePageState extends State<HomePage> {
   /// Up must always be able to come back to the poster: directional traversal
   /// rejects a hero whose centre is not above the row zone's centre, so when
   /// the first row hangs off the top edge the key used to do nothing at all.
+  /// Up/Down between rows is resolved by row index, never by directional
+  /// traversal. Only one row is on screen at a time and the side rail floats
+  /// over their left edge, so the geometric search kept handing the D-pad to a
+  /// rail icon even when the previous row was sitting right there.
   KeyEventResult _pageKeys(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.arrowUp) {
-      return KeyEventResult.ignored;
-    }
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    final up = key == LogicalKeyboardKey.arrowUp;
+    final down = key == LogicalKeyboardKey.arrowDown;
+    if (!up && !down) return KeyEventResult.ignored;
     if (_heroNode.hasFocus) return KeyEventResult.ignored;
-    if (ZoneNavigator.move(TraversalDirection.up)) return KeyEventResult.handled;
+    final rows = _rows;
+    if (rows == null || rows.isEmpty) return KeyEventResult.ignored;
+    final active = _activeRowFor(rows);
+    final step = up ? -1 : 1;
+    var i = active + step;
+    while (i >= 0 && i < rows.length && !_rowShows(rows[i])) {
+      i += step;
+    }
+    if (i >= 0 && i < rows.length) {
+      _focusRow(rows[i]);
+      return KeyEventResult.handled;
+    }
+    // Nothing above: the poster is the only place left to go. Below the last
+    // row there is nowhere useful to land, and letting the event fall through
+    // to traversal is what used to drop the focus onto a rail icon.
+    if (!up) return KeyEventResult.handled;
     if (!_heroNode.canRequestFocus) return KeyEventResult.ignored;
     _heroNode.requestFocus();
     return KeyEventResult.handled;
+  }
+
+  /// Hands the keyboard to [row], keeping the row's own remembered card so the
+  /// reader comes back to the item they left on.
+  void _focusRow(_Row row) {
+    final key = _rowZoneKeys[row];
+    final zone = key == null ? null : FocusZone.nodeOf(key);
+    if (zone == null) return;
+    final i = _rows?.indexOf(row) ?? -1;
+    if (i >= 0 && i != _activeRow) setState(() => _activeRow = i);
+    ZoneNavigator.enter(zone);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _pinActiveRow());
   }
 
   /// The poster is pinned now, so landing on it no longer has to bring it back.
@@ -1430,6 +1481,8 @@ class _HomePageState extends State<HomePage> {
           child: MediaRow(
             title: row.title(context.l10n),
             height: areaH,
+            arrowLeft: contentLeft,
+            zoneKey: _rowZoneKeys.putIfAbsent(row, () => GlobalKey()),
             gap: switch ((row.kind, row.style)) {
               (_Kind.collections, _) => 28,
               (_, CardStyle.ranked) => 8,

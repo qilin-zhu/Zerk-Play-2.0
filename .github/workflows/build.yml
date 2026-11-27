@@ -19,7 +19,7 @@ env:
   # Single source of truth for the release tag, the asset names and the
   # installer. Keep it in sync with pubspec.yaml (version:) and
   # lib/core/log/app_log.dart (appVersion).
-  APP_VERSION: '2.10.20'
+  APP_VERSION: '2.10.21'
 
 # The release job pushes a tag and uploads assets.
 permissions:

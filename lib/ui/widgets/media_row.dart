@@ -28,11 +28,22 @@ class MediaRow extends StatefulWidget {
     this.trailingTitle,
     this.gap = Zs.cardGap,
     this.left = contentLeft,
+    this.arrowLeft,
+    this.zoneKey,
     this.initialIndex,
     this.itemExtent,
   });
 
   final double left;
+
+  /// Left edge of the row's prev arrow. Null keeps the circle just outside the
+  /// cards; the home page passes [left] so it lines up with the carousel arrow.
+  final double? arrowLeft;
+
+  /// Lets the page address this row's focus zone - the home page uses it to
+  /// hand the D-pad to a specific row instead of letting directional traversal
+  /// pick a neighbour (which used to land on the side rail).
+  final GlobalKey? zoneKey;
 
   final String title;
   final Widget? trailingTitle;
@@ -97,7 +108,9 @@ class _MediaRowState extends State<MediaRow> {
         child: PointerScrollArrows(
           controller: controller,
           leftInset: widget.left,
+          arrowLeft: widget.arrowLeft,
           child: FocusZone(
+            key: widget.zoneKey,
             debugLabel: 'row:${widget.title}',
             child: ListView.separated(
               controller: controller,
