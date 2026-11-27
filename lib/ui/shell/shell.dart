@@ -332,6 +332,30 @@ class _ShellState extends State<Shell> {
     if (zone != null) ZoneNavigator.enter(zone);
   }
 
+  /// The pointer left the rail strip.
+  ///
+  /// With a mouse, the highlight belongs to whatever is under the cursor: an
+  /// item that keeps the focus also keeps its white pill (and the dark glyph on
+  /// it) sitting in the middle of the screen after the cursor has moved on.
+  /// Handing the focus back to the page also lets the rail go back to its idle,
+  /// invisible state. Keyboard and remote control never come through here - the
+  /// D-pad highlight must survive while the user is on the rail.
+  void _leaveRail() {
+    if (!_railHovered) return;
+    setState(() => _railHovered = false);
+    if (_menuOpen || !InputMode.isPointer || !_railFocused) return;
+    final pageKey = _pageZoneKeys[_tab];
+    if (pageKey != null) {
+      final zone = FocusZone.nodeOf(pageKey);
+      if (zone != null) ZoneNavigator.enter(zone);
+    }
+    // Nothing focusable on the page (Settings is one of those): drop the
+    // highlight rather than leave it stuck on the rail.
+    for (final n in [..._railNodes.values, _logoNode, _refreshNode]) {
+      if (n.hasPrimaryFocus) n.unfocus();
+    }
+  }
+
   /// Identity of the open session, compared against [SavedServer.serverKey] so
   /// the switcher can mark — and skip — the server that is already running.
   String? get _serverKey {
@@ -377,12 +401,14 @@ class _ShellState extends State<Shell> {
             // The rail widens while the switcher is open, so the panel can be
             // anchored to its right edge without measuring anything.
             final railExpanded = _menuOpen || (_railFocused && (!pointer || _railHovered));
-            // The app mark in the rail's corner stays hidden until the rail is
-            // actually in use: over artwork it is the first thing the eye lands
-            // on, and every page looks cleaner without it. Hovering the rail or
-            // giving it keyboard focus brings it back (the switcher needs it as
-            // its anchor, so an open switcher always shows it).
-            final logoVisible = _menuOpen || _railHovered || _railFocused;
+            // Idle, the rail is not there at all: no glyphs, no scrim bar, no
+            // selection frame. It overlays the artwork, so a permanent dark
+            // strip down the left edge was the first thing the eye landed on.
+            // Hovering its strip or giving it keyboard focus brings the whole
+            // thing back (the switcher needs the mark as its anchor, so an open
+            // switcher always counts as active).
+            final railActive = _menuOpen || _railHovered || _railFocused;
+            final logoVisible = railActive;
             // The panel starts under the mark (~110 px down), so it can use
             // whatever is left of the window minus a bottom margin.
             final panelHeight = (MediaQuery.sizeOf(context).height - 140).clamp(300.0, 720.0).toDouble();
@@ -444,7 +470,7 @@ class _ShellState extends State<Shell> {
                     },
                     child: MouseRegion(
                       onEnter: (_) => setState(() => _railHovered = true),
-                      onExit: (_) => setState(() => _railHovered = false),
+                      onExit: (_) => _leaveRail(),
                       child: Focus(
                         canRequestFocus: false,
                         skipTraversal: true,
@@ -458,6 +484,7 @@ class _ShellState extends State<Shell> {
                             profile: services.profiles.profile,
                             current: _tab,
                             expanded: railExpanded,
+                            visible: railActive,
                             logoVisible: logoVisible,
                             menuOpen: _menuOpen,
                             logoNode: _logoNode,
@@ -568,6 +595,7 @@ class _Rail extends StatefulWidget {
     required this.profile,
     required this.current,
     required this.expanded,
+    required this.visible,
     required this.logoVisible,
     required this.menuOpen,
     required this.logoNode,
@@ -592,6 +620,10 @@ class _Rail extends StatefulWidget {
   final UserProfile? profile;
   final ShellTab current;
   final bool expanded;
+
+  /// False while the rail is idle: it fades out completely (glyphs, scrim and
+  /// selection alike) and only the hover strip keeps hit-testing.
+  final bool visible;
 
   /// Whether the app mark in the corner is on screen: true only while the rail
   /// is hovered, focused or has its switcher open.
@@ -684,6 +716,19 @@ class _RailState extends State<_Rail> {
 
   @override
   Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      opacity: widget.visible ? 1 : 0,
+      duration: Zm.normal,
+      curve: Zm.curve,
+      // Opacity rather than Offstage: at zero the strip must still take the
+      // pointer, otherwise moving the mouse into it could never reveal it. The
+      // glyph column stays focusable for the same reason - a remote control
+      // entering the zone is what makes it visible again.
+      child: _bar(context),
+    );
+  }
+
+  Widget _bar(BuildContext context) {
     final tabs = widget.tabs;
     final expanded = widget.expanded;
     return AnimatedContainer(
@@ -897,13 +942,11 @@ class _RailItem extends StatelessWidget {
             decoration: BoxDecoration(
               color: focused
                   ? Colors.white
-                  // The selected pill is a dark wash plus a hairline, so it reads
-                  // both ways: it dims against a bright poster and the outline
-                  // still shows on a dark one.
-                  : (selected && !expanded ? const Color(0x4D000000) : Colors.transparent),
-              border: selected && !expanded && !focused
-                  ? Border.all(color: const Color(0x3DFFFFFF))
-                  : null,
+                  // A plain dark wash: no outline. It dims whatever artwork is
+                  // underneath, which is what makes the white glyph read - a
+                  // hairline frame on top of that just looked like a stray ring
+                  // floating over the poster.
+                  : (selected && !expanded ? const Color(0x59000000) : Colors.transparent),
               borderRadius: BorderRadius.circular(30),
             ),
             clipBehavior: Clip.hardEdge,
@@ -928,9 +971,10 @@ class _RailItem extends StatelessWidget {
                       icon: icon ?? tab!.icon,
                       size: child ? 24 : 28,
                       color: fg,
-                      // Collapsed, the rail floats over the artwork: a soft
-                      // shadow keeps the glyph readable on bright posters.
-                      shadow: !expanded,
+                      // Only for a light glyph over the artwork. Focused, the
+                      // glyph turns dark on a white pill and these shadows
+                      // become a black halo around it.
+                      shadow: !expanded && !focused,
                       busy: busy,
                     ),
                   if (expanded)
