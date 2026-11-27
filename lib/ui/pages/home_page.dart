@@ -123,12 +123,23 @@ class _HomePageState extends State<HomePage> {
   double _rowTop = 1;
   double _overlap = 0;
 
+  /// Index of the only row that is on screen. Everything else stays mounted -
+  /// so its focus nodes and horizontal offset survive - but paints nothing.
+  int _activeRow = 0;
+
+  /// One anchor per row, used to measure the heights that decide how far the
+  /// list has to travel to bring that row into the slot.
+  final _rowAnchors = <_Row, GlobalKey>{};
+
   /// Title block of a row: 18 px bottom padding + the text line.
   static const _rowTitleH = 48.0;
 
   static const _maxFade = 320.0;
   static const _heroFocusH = 44.0;
-  static const _arrowLeft = 88.0;
+  /// The arrows line up with the row titles and the hero text instead of
+  /// floating 70 px to their left, which used to leave the left circle
+  /// stranded near the window edge.
+  static const _arrowLeft = contentLeft;
 
   List<_Row>? _rows;
   final _data = <_Row, Future<MixedItems>>{};
@@ -853,7 +864,10 @@ class _HomePageState extends State<HomePage> {
     final fullW = size.width.clamp(320.0, 4096.0);
     final fullH = fullW * 9 / 16;
     _fullH = fullH;
-    _rowTop = (size.height - _rowPeek(rows)).clamp(0.0, fullH);
+    // One row at a time (see [_rowSlot]): the poster never moves, so the slot
+    // the visible row sits in comes from that row's own height.
+    final active = _activeRowFor(rows);
+    _rowTop = (size.height - _rowPeekOf(rows.isEmpty ? null : rows[active])).clamp(0.0, fullH);
     _overlap = (fullH - _rowTop).clamp(0.0, fullH);
     if (_libraryLayout && !_libraryLogged) {
       _libraryLogged = true;
@@ -892,19 +906,14 @@ class _HomePageState extends State<HomePage> {
               builder: (_, info, _) => HeroAmbience(url: info?.backdrop),
             ),
           ),
-          // Poster layer: pinned and full-bleed.
+          // Poster layer: pinned and full-bleed. It used to shrink with the
+          // scroll offset; now that the rows page one at a time the artwork is
+          // a fixed backdrop and never moves under the reader.
           Positioned(
             left: 0,
             top: 0,
             right: 0,
-            child: ValueListenableBuilder<double>(
-              valueListenable: _scrollOffset,
-              builder: (context, offset, _) {
-                final h = (fullH - offset).clamp(0.0, fullH);
-                if (h <= 0.5) return const SizedBox.shrink();
-                return _heroPoster(h, (offset / fullH).clamp(0.0, 1.0), posterImage, posterPanel);
-              },
-            ),
+            child: _heroPoster(fullH, 0, posterImage, posterPanel),
           ),
           // Content layer (top): transparent, so the wheel scrolls from anywhere
           // and the rows paint over the poster's bottom edge.
@@ -930,14 +939,18 @@ class _HomePageState extends State<HomePage> {
                   CardTrailers(
                     child: RowsScrollView(
                       controller: _scroll,
+                      // Paged by [_moveRow], never by dragging: the row slot has
+                      // to stay where it is.
+                      physics: const NeverScrollableScrollPhysics(),
+                      // Slack under the last row so it can reach the slot too.
+                      bottom: size.height,
                       top: _rowTop,
-                      children: [for (final (i, row) in rows.indexed) _buildRow(row, first: i == 0)],
+                      children: [
+                        for (final (i, row) in rows.indexed) _rowSlot(row, i, active, first: i == 0),
+                      ],
                     ),
                   ),
-                  ValueListenableBuilder<double>(
-                    valueListenable: _scrollOffset,
-                    builder: (context, offset, _) => _heroOverlay(fullH, offset),
-                  ),
+                  _heroOverlay(fullH, 0),
                 ]),
               ),
             ),
@@ -1002,26 +1015,97 @@ class _HomePageState extends State<HomePage> {
     }
     return const Positioned.fill(child: IgnorePointer(child: CinemaLoader()));
   }
-  /// Height taken by the first row that actually renders: its title plus the
-  /// card block. The rows start exactly that far from the bottom edge, so the
-  /// very first row is always fully visible instead of being clipped.
-  double _rowPeek(List<_Row> rows) {
-    _Row? first;
-    for (final r in rows) {
-      if (r.kind == _Kind.moods || !_allowed.contains(r)) continue;
-      final items = _resolved[r];
-      if (items == null || items.isNotEmpty) {
-        first = r;
-        break;
-      }
-    }
-    if (first == null) return 0;
-    final areaH = switch (first.kind) {
+  /// Height taken by a row: its title plus the card block. The row sits exactly
+  /// that far from the bottom edge, so it is always fully visible instead of
+  /// being clipped.
+  double _rowPeekOf(_Row? row) {
+    if (row == null) return 0;
+    final areaH = switch (row.kind) {
+      _Kind.moods => cardAreaHeight(CardStyle.poster),
       _Kind.collections => 560 * 0.42 + 44,
       _Kind.continueWatching || _Kind.myMedia => cardAreaHeight(CardStyle.landscape),
-      _ => cardAreaHeight(first.style),
+      _ => cardAreaHeight(row.style),
     };
     return _rowTitleH + areaH + Zs.rowGap;
+  }
+
+  /// Whether this row can be the one on screen: allowed by the account, and
+  /// either still loading (its skeleton counts) or actually holding items.
+  bool _rowShows(_Row row) {
+    if (!_allowed.contains(row)) return false;
+    if (row.kind == _Kind.moods) return true;
+    final items = _resolved[row];
+    return items == null || items.isNotEmpty;
+  }
+
+  /// The row to show: [_activeRow] when it is still there and still has
+  /// something in it, otherwise the first row that does. Rows resolve out of
+  /// order, so the active one going empty has to hand over instead of leaving
+  /// the page blank.
+  int _activeRowFor(List<_Row> rows) {
+    if (rows.isEmpty) return 0;
+    final start = _activeRow.clamp(0, rows.length - 1);
+    if (_rowShows(rows[start])) return start;
+    for (var i = 0; i < rows.length; i++) {
+      if (_rowShows(rows[i])) return i;
+    }
+    return start;
+  }
+
+  /// One row of the page. Only [active] paints and takes the pointer; the rest
+  /// keep their state (focus nodes, horizontal scroll) but are invisible, which
+  /// is what lets the poster stay fixed while the reader moves down.
+  Widget _rowSlot(_Row row, int i, int active, {required bool first}) {
+    final on = i == active;
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onFocusChange: (f) {
+        if (!f || _activeRow == i) return;
+        setState(() => _activeRow = i);
+        WidgetsBinding.instance.addPostFrameCallback((_) => _pinActiveRow());
+      },
+      child: IgnorePointer(
+        ignoring: !on,
+        child: AnimatedOpacity(
+          opacity: on ? 1 : 0,
+          duration: Zm.normal,
+          curve: Zm.curve,
+          child: KeyedSubtree(
+            key: _rowAnchors.putIfAbsent(row, () => GlobalKey()),
+            child: _buildRow(row, first: first),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Scrolls the list just enough to put the active row in the slot. Heights
+  /// come from the laid-out rows themselves: a row that is still a skeleton is
+  /// shorter than the shelf that replaces it, and the arithmetic has to follow.
+  void _pinActiveRow() {
+    final rows = _rows;
+    if (rows == null || !mounted || !_scroll.hasClients) return;
+    final active = _activeRowFor(rows);
+    var target = 0.0;
+    for (var i = 0; i < active; i++) {
+      final box = _rowAnchors[rows[i]]?.currentContext?.findRenderObject();
+      if (box is RenderBox) target += box.size.height;
+    }
+    final p = _scroll.position;
+    if (!p.hasContentDimensions) return;
+    target = target.clamp(0.0, p.maxScrollExtent);
+    if ((p.pixels - target).abs() < 0.5) return;
+    p.animateTo(target, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+  }
+
+  /// Mouse wheel: the next/previous row. Driven by the focus, exactly like the
+  /// D-pad - whichever row gains it is the one that becomes visible - because
+  /// the rows themselves no longer scroll freely (see [_rowSlot]).
+  void _moveRow(int delta) {
+    final rows = _rows;
+    if (rows == null || rows.isEmpty) return;
+    ZoneNavigator.move(delta > 0 ? TraversalDirection.down : TraversalDirection.up);
   }
 
   /// Poster composition: the artwork is laid out at the full height and
@@ -1068,36 +1152,73 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ),
+          // The shade sits on the artwork itself, not on the text: it is a pair
+          // of full-bleed gradients that die out well inside the frame, so the
+          // darkening belongs to the picture instead of being a box drawn
+          // behind the type.
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ValueListenableBuilder<bool>(
+                valueListenable: _heroFocus,
+                builder: (_, focused, _) => _heroShade(focused),
+              ),
+            ),
+          ),
           Positioned(
-            left: contentLeft - 20,
+            left: contentLeft,
             right: 220,
             bottom: _overlap + 22,
             child: Opacity(
               opacity: fadeOut,
-              child: Align(
-                alignment: Alignment.bottomLeft,
-                child: IgnorePointer(
-                  // No ring: the translucent plate behind the text is the
-                  // only focus indicator, exactly like the fnOS home.
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: _heroFocus,
-                    builder: (_, focused, child) => AnimatedContainer(
-                      duration: Zm.fast,
-                      curve: Zm.curve,
-                      padding: const EdgeInsets.fromLTRB(20, 14, 24, 10),
-                      decoration: BoxDecoration(
-                        color: focused ? const Color(0x59000000) : Colors.transparent,
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: child,
-                    ),
-                    child: panel,
-                  ),
+              child: IgnorePointer(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 16, 40, 12),
+                  child: panel,
                 ),
               ),
             ),
           ),
         ]),
+      ),
+    );
+  }
+
+  /// Darkness under the hero text, painted across the whole artwork.
+  ///
+  /// Two full-bleed gradients: one rising from the bottom edge, one sweeping in
+  /// from the left. Both reach zero opacity well before the opposite side, so
+  /// the result reads as the poster's own dark corner - no edge, corner or fill
+  /// the eye can recognise as "a box behind the text". White type on a bright
+  /// poster stays readable because the darkest part of the blend lands exactly
+  /// where the text sits, and it only deepens a step when the poster is focused.
+  Widget _heroShade(bool focused) {
+    return AnimatedContainer(
+      duration: Zm.normal,
+      curve: Zm.curve,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.bottomCenter,
+          end: Alignment.topCenter,
+          colors: focused
+              ? const [Color(0xC7000000), Color(0xAD000000), Color(0x00000000)]
+              : const [Color(0xB3000000), Color(0x99000000), Color(0x00000000)],
+          stops: const [0, 0.34, 0.80],
+        ),
+      ),
+      child: AnimatedContainer(
+        duration: Zm.normal,
+        curve: Zm.curve,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: focused
+                ? const [Color(0xA6000000), Color(0x00000000)]
+                : const [Color(0x8C000000), Color(0x00000000)],
+            stops: const [0, 0.62],
+          ),
+        ),
+        child: const SizedBox.expand(),
       ),
     );
   }
@@ -1144,17 +1265,12 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
-  /// Mouse-only layer over the poster: a click opens the shown resource and a
-  /// drag scrolls the page (the scroll view is a sibling underneath).
+  /// Mouse-only layer over the poster: a click opens the shown resource. The
+  /// drag-to-scroll is gone with the free scrolling - the rows are paged now.
   Widget _heroPointer() {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _openShown,
-      onVerticalDragUpdate: (d) {
-        if (!_scroll.hasClients) return;
-        final p = _scroll.position;
-        _scroll.jumpTo((p.pixels - d.delta.dy).clamp(0.0, p.maxScrollExtent));
-      },
       child: const SizedBox.expand(),
     );
   }
@@ -1249,22 +1365,16 @@ class _HomePageState extends State<HomePage> {
     return KeyEventResult.handled;
   }
 
-  /// Brings the pinned poster back to its resting size when the D-pad lands on
-  /// it, since it lives outside the scroll view and `revealFocused` cannot.
-  void _scrollToPoster() {
-    if (!_scroll.hasClients) return;
-    final p = _scroll.position;
-    if (p.pixels <= 0.5) return;
-    p.animateTo(0, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
-  }
+  /// The poster is pinned now, so landing on it no longer has to bring it back.
+  void _scrollToPoster() {}
 
-  /// Safety net for mouse wheels / trackpads: `Scrollable` normally consumes the
-  /// pointer signal itself, so this only kicks in when it does not.
+  /// Safety net for mouse wheels / trackpads. The rows no longer scroll, so a
+  /// wheel notch means "next row" / "previous row" instead of moving the list:
+  /// the poster and the row slot both stay where they are.
   void _onPointerSignal(PointerSignalEvent e) {
-    if (e is! PointerScrollEvent || !_scroll.hasClients) return;
-    final p = _scroll.position;
-    if (!p.hasContentDimensions) return;
-    _scroll.jumpTo((p.pixels + e.scrollDelta.dy).clamp(0.0, p.maxScrollExtent));
+    if (e is! PointerScrollEvent) return;
+    if (e.scrollDelta.dy.abs() < 1) return;
+    _moveRow(e.scrollDelta.dy > 0 ? 1 : -1);
   }
 
   /// Left/Right walk the carousel pool, rolling forward from whatever is on

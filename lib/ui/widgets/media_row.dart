@@ -7,7 +7,13 @@ import '../theme/tokens.dart';
 import 'common.dart';
 import 'scroll_arrows.dart';
 
-const double contentLeft = Zs.railCollapsed + 56;
+/// Left edge of every page's content: row titles, cards, hero text.
+///
+/// It used to clear the collapsed rail (`Zs.railCollapsed + 56` = 160), which
+/// left a wide dead margin once the rail started hiding itself when idle. The
+/// content now runs close to the edge and the rail - which is only ever on
+/// screen while hovered or focused - floats over it.
+const double contentLeft = 48;
 
 double posterGridCardWidth(double width, int columns) =>
     ((width - contentLeft - 120 - Zs.cardGap * (columns - 1)) / columns).clamp(100.0, 600.0);
