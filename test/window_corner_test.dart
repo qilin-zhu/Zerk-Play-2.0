@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:zerk_play/l10n/l10n.dart';
 import 'package:zerk_play/ui/widgets/window_corner.dart';
 
 /// The corner rests as a 24-hour clock and only shows the window buttons while
@@ -16,14 +17,21 @@ void main() {
     required VoidCallback onMinimize,
     required VoidCallback onToggleMaximize,
     required VoidCallback onClose,
+    bool showClock = true,
   }) async {
     await tester.pumpWidget(MaterialApp(
+      // Same localisation wiring as the app: the clock formats through intl
+      // with the UI locale, so it needs the delegates loaded.
+      locale: const Locale('zh'),
+      supportedLocales: L10n.supportedLocales,
+      localizationsDelegates: L10n.localizationsDelegates,
       home: Scaffold(
         body: Align(
           alignment: Alignment.topRight,
           child: WindowCorner(
             maximized: false,
             fullScreen: false,
+            showClock: showClock,
             onMinimize: onMinimize,
             onToggleMaximize: onToggleMaximize,
             onClose: onClose,
@@ -133,6 +141,31 @@ void main() {
     await mouse.moveTo(Offset(corner.left + 20, corner.center.dy));
     await tester.pumpAndSettle();
     expect(opacityAround(tester, find.byIcon(Icons.close)), 0);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('during playback the clock stands down, the buttons still open', (tester) async {
+    var closed = 0;
+    final corner = await pumpCorner(
+      tester,
+      onMinimize: () {},
+      onToggleMaximize: () {},
+      onClose: () => closed++,
+      showClock: false,
+    );
+
+    // The player OSD has its own clock; two of them at once is worse than none.
+    expect(opacityAround(tester, find.textContaining(RegExp(r'^\d{2}:\d{2}$'))), 0);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(corner.center);
+    await tester.pumpAndSettle();
+    await tester.tapAt(closeSpot(corner));
+    await tester.pumpAndSettle();
+    expect(closed, 1, reason: 'a frameless full screen still has to be closable');
 
     await tester.pumpWidget(const SizedBox());
   });

@@ -4,6 +4,7 @@ import 'package:window_manager/window_manager.dart';
 import '../../core/host.dart';
 import '../../core/log/app_log.dart';
 import '../../core/windows/native_window.dart';
+import '../../playback/playback_bus.dart';
 import 'window_corner.dart';
 
 /// Height of the invisible drag strip along the top edge of the window.
@@ -31,6 +32,7 @@ class WindowChromeLayer extends StatefulWidget {
 class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListener {
   bool _fullScreen = NativeWindow.fullScreen.value;
   bool _maximized = false;
+  bool _playing = PlaybackBus.current.value != null;
 
   @override
   void initState() {
@@ -40,6 +42,7 @@ class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListen
     // Full screen on Windows is set by the runner, not by window_manager, so
     // the plugin's enter/leave events never fire here; the notifier does.
     NativeWindow.fullScreen.addListener(_onFullScreenChanged);
+    PlaybackBus.current.addListener(_onPlaybackChanged);
     AppLog.write('[win] frameless chrome (drag bar 32, clock corner)');
     _sync();
   }
@@ -47,6 +50,12 @@ class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListen
   void _onFullScreenChanged() {
     if (!mounted) return;
     setState(() => _fullScreen = NativeWindow.fullScreen.value);
+  }
+
+  void _onPlaybackChanged() {
+    final playing = PlaybackBus.current.value != null;
+    if (!mounted || playing == _playing) return;
+    setState(() => _playing = playing);
   }
 
   Future<void> _sync() async {
@@ -60,6 +69,7 @@ class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListen
     if (Host.isWindows) {
       windowManager.removeListener(this);
       NativeWindow.fullScreen.removeListener(_onFullScreenChanged);
+      PlaybackBus.current.removeListener(_onPlaybackChanged);
     }
     super.dispose();
   }
@@ -109,6 +119,7 @@ class _WindowChromeLayerState extends State<WindowChromeLayer> with WindowListen
           child: WindowCorner(
             maximized: _maximized,
             fullScreen: _fullScreen,
+            showClock: !_playing,
             onMinimize: () => windowManager.minimize(),
             onToggleMaximize: _fullScreen ? _leaveFullScreen : _toggleMaximize,
             onClose: () => windowManager.close(),

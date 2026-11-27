@@ -1,6 +1,6 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
+
+import 'wall_clock.dart';
 
 /// Size of the top-right corner strip: three 54 px glyphs, 40 px tall, plus the
 /// 1 px border the capsule draws on each side.
@@ -41,6 +41,7 @@ class WindowCorner extends StatefulWidget {
     required this.onMinimize,
     required this.onToggleMaximize,
     required this.onClose,
+    this.showClock = true,
   });
 
   final bool maximized;
@@ -48,6 +49,11 @@ class WindowCorner extends StatefulWidget {
   final VoidCallback onMinimize;
   final VoidCallback onToggleMaximize;
   final VoidCallback onClose;
+
+  /// The player OSD draws its own clock while a video is up, so the corner one
+  /// stands down instead of printing a second time twice as high. The buttons
+  /// still wake on hover: that is the only way out of a frameless full screen.
+  final bool showClock;
 
   @override
   State<WindowCorner> createState() => _WindowCornerState();
@@ -89,12 +95,18 @@ class _WindowCornerState extends State<WindowCorner> {
             Positioned.fill(
               child: IgnorePointer(
                 child: AnimatedOpacity(
-                  opacity: _revealed ? 0 : 1,
+                  opacity: _revealed || !widget.showClock ? 0 : 1,
                   duration: _fade,
                   curve: Curves.easeOut,
                   child: const Align(
                     alignment: Alignment.centerRight,
-                    child: Padding(padding: EdgeInsets.only(right: 12), child: _Clock()),
+                    child: Padding(
+                      padding: EdgeInsets.only(right: 12),
+                      // Same widget, same shadow as the clock the player OSD
+                      // draws, so the corner does not change character between
+                      // the media wall and a video.
+                      child: WallClock(size: 18, shadow: true),
+                    ),
                   ),
                 ),
               ),
@@ -220,69 +232,6 @@ class _ChromeButtonState extends State<_ChromeButton> {
           ),
           child: Icon(widget.icon, size: 17, color: fg),
         ),
-      ),
-    );
-  }
-}
-
-/// 24-hour wall clock in the top-right corner, replacing the window buttons.
-///
-/// Deliberately manual instead of `DateFormat.jm`: this must stay 24-hour in
-/// every UI language, and `jm` is the one pattern that switches to AM/PM with
-/// the locale. It schedules itself onto the minute boundary so the digits flip
-/// when the minute actually changes instead of drifting a second per tick.
-class _Clock extends StatefulWidget {
-  const _Clock();
-
-  @override
-  State<_Clock> createState() => _ClockState();
-}
-
-class _ClockState extends State<_Clock> {
-  DateTime _now = DateTime.now();
-  Timer? _tick;
-
-  @override
-  void initState() {
-    super.initState();
-    _schedule();
-  }
-
-  void _schedule() {
-    final now = DateTime.now();
-    _tick?.cancel();
-    _tick = Timer(Duration(seconds: 60 - now.second, milliseconds: -now.millisecond), () {
-      if (!mounted) return;
-      setState(() => _now = DateTime.now());
-      _schedule();
-    });
-  }
-
-  @override
-  void dispose() {
-    _tick?.cancel();
-    super.dispose();
-  }
-
-  static String _two(int v) => v.toString().padLeft(2, '0');
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      '${_two(_now.hour)}:${_two(_now.minute)}',
-      style: const TextStyle(
-        color: Color(0xF2FFFFFF),
-        fontSize: 16,
-        height: 1.0,
-        fontWeight: FontWeight.w500,
-        letterSpacing: 0.6,
-        // Fixed-width digits: without them the clock twitches sideways every
-        // time a 1 turns into a 2.
-        fontFeatures: [FontFeature.tabularFigures()],
-        shadows: [
-          Shadow(color: Color(0xCC000000), blurRadius: 10, offset: Offset(0, 1)),
-          Shadow(color: Color(0x80000000), blurRadius: 3),
-        ],
       ),
     );
   }
