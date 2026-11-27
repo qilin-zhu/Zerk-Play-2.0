@@ -311,7 +311,7 @@ class _DetailsPageState extends State<DetailsPage> {
     await _load(outcome.lastItem?.id ?? item.id);
   }
 
-  /// 剧集卡片上的圆钮：直接开播这一集。
+  /// 剧集卡片的圆钮（以及当前集的确认键）：直接开播这一集。
   ///
   /// 正在播的那一集走 [_play]，和顶部的「继续播放」按钮同一条路，因此会带上
   /// 当前选中的音轨、字幕和版本，并从上次的进度续播；其他集交给 playItem 用
@@ -514,8 +514,14 @@ class _DetailsPageState extends State<DetailsPage> {
                     title: '${e.indexNumber ?? ''}. ${e.name}',
                     subtitle: current ? l10n.nowShowing : formatRuntime(l10n, e.runtime),
                     focusNode: current ? _episodeNode : null,
+                    // 当前这一集已经在这个页面上了：确认键再 push 一次同一集
+                    // 没有意义（当初就是为这个写的空操作），现在改成直接续播。
                     onSelect: () {
-                      if (!current) Navigator.of(context).pushReplacement(detailsRoute(e));
+                      if (current) {
+                        unawaited(_playEpisode(e));
+                      } else {
+                        Navigator.of(context).pushReplacement(detailsRoute(e));
+                      }
                     },
                     // 卡片中间的圆钮 = 直接播这一集。没传 onPlay 时它会回落到
                     // onSelect，而 current 集的 onSelect 是空操作（上面那个 if），
