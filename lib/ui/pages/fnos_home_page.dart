@@ -262,12 +262,39 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
   /// Picks a random pool of resources for the hero and fetches their details
   /// (backdrops/overview) one by one, upgrading the visible slide as each
   /// arrives.
+  ///
+  /// trimemedia sorts by `create_time DESC` and nothing else, so page 1 is
+  /// "what was added last" — a fixed window that barely changes from one launch
+  /// to the next. Shuffling that window (the old behaviour) put the same
+  /// handful of titles on the poster every time, which read as a cached image.
+  /// The fix is to walk to another page of the library as well, so the draw
+  /// really comes from the whole collection.
   Future<void> _loadSlides(FnosClient client) async {
     try {
-      final data = await client.itemList(pageSize: 60, page: 1, types: const ['Movie', 'TV', 'Directory', 'Video', 'LiveChannel']);
-      final list = data is List ? data : data is Map ? data['list'] as List? ?? const [] : const [];
-      final pool = [for (final e in list) if (e is Map) FnOsItem.from(e)]..shuffle(Random.secure());
-      if (!mounted) return;
+      const types = ['Movie', 'TV', 'Directory', 'Video', 'LiveChannel'];
+      final first = await client.itemList(pageSize: _slidePageSize, page: 1, types: types);
+      final lists = <List<Object?>>[_listOf(first)];
+      final total = first is Map ? (first['total'] as num?)?.toInt() ?? 0 : 0;
+      final pages = (total / _slidePageSize).ceil();
+      if (pages > 1) {
+        final page = 1 + Random.secure().nextInt(pages);
+        try {
+          final second = _listOf(await client.itemList(pageSize: _slidePageSize, page: page, types: types));
+          if (second.isNotEmpty) lists.add(second);
+          AppLog.write('[fnos] slides: page $page/$pages (+${second.length})');
+        } catch (e) {
+          // A server that will not go past page 1 still gets a carousel.
+          AppLog.write('[fnos] slides page $page/$pages: $e');
+        }
+      }
+      final seen = <String>{};
+      final pool = [
+        for (final list in lists)
+          for (final e in list)
+            if (e is Map)
+              if (seen.add('${e['guid'] ?? e['name']}')) FnOsItem.from(e),
+      ]..shuffle(Random.secure());
+      if (!mounted || pool.isEmpty) return;
       setState(() => _slides = pool.take(_slideCount).toList());
       _showSlide(immediate: true);
       _scheduleSlide();
@@ -287,6 +314,13 @@ class _FnOsHomePageState extends State<FnOsHomePage> {
       debugPrint('[fnos] slides: $e');
     }
   }
+
+  /// Page size of one carousel draw: small enough that a random page is a
+  /// genuine slice of the library rather than a whole library on its own.
+  static const _slidePageSize = 60;
+
+  static List<Object?> _listOf(Object? data) =>
+      data is List ? data : data is Map ? (data['list'] as List?) ?? const [] : const [];
 
   /// Fills one poster row per library, sequentially so the rows appear one by
   /// one without hammering the server. The type filter mirrors FlyNarwhal's

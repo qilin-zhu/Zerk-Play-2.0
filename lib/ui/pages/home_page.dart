@@ -108,6 +108,11 @@ class _HomePageState extends State<HomePage> {
   bool _pinned = false;
   Object? _pinnedItem;
 
+  /// Bumped on every carousel fetch, so a reply from a request that started
+  /// before a library switch cannot put the old library's posters back on the
+  /// hero.
+  int _carouselToken = 0;
+
   static const _slideInterval = Duration(seconds: 10);
   static const _slideCount = 8;
 
@@ -193,10 +198,15 @@ class _HomePageState extends State<HomePage> {
     super.didChangeDependencies();
     if (_rows == null) {
       AppLog.write('[emby] home build poster-v2 (random carousel, pin on card, resume on hero)');
-      _rows = _buildRows(AppServicesScope.read(context));
+      final first = AppServicesScope.read(context);
+      _rows = _buildRows(first);
       _allowFirstRows();
       _scroll.addListener(_onScroll);
       _awaitFirstRows();
+      // Fired here rather than when the rows are in: the draw is independent of
+      // them, and starting it first is what lets the random batch win the race
+      // often enough that the row-based stand-in never shows at all.
+      unawaited(_loadCarousel(first));
     }
     if (_services == null) {
       _services = AppServicesScope.read(context);
@@ -229,6 +239,7 @@ class _HomePageState extends State<HomePage> {
       _allowFirstRows();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _pump());
+    unawaited(_loadCarousel(s));
   }
 
   void _onProfile() {
@@ -393,6 +404,10 @@ class _HomePageState extends State<HomePage> {
       _allowFirstRows();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _pump());
+    // A refresh is exactly when the user expects a different poster: libraries
+    // were added or scanned, so draw again instead of replaying the old pool.
+    final s = _services;
+    if (s != null) unawaited(_loadCarousel(s));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.wait(_data.values.map((f) => f.catchError((Object _) => const <Object>[]))).whenComplete(() {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -785,9 +800,15 @@ class _HomePageState extends State<HomePage> {
     _publishItem(data, info, immediate: immediate);
   }
 
-  /// Builds the carousel pool from what the rows have loaded so far, shuffled
-  /// once so every visit starts on a different resource. Called after each row
-  /// resolves: the first two items are enough, later rows are ignored.
+  /// Stand-in pool: what the rows have loaded so far, shuffled.
+  ///
+  /// Only ever a stand-in. The rows carry what the first screen shows -
+  /// "continue watching" plus the newest items of the top libraries - and that
+  /// set does not change between launches, so shuffling it put the same
+  /// posters on the hero every time, just in a different order (which read as
+  /// "the carousel is loading a cached poster"). The real source is
+  /// [_loadCarousel]; this one exists so the stage is never empty while that
+  /// request is in flight.
   void _startCarousel() {
     if (!mounted) return;
     if (_slides != null) return;
@@ -805,11 +826,56 @@ class _HomePageState extends State<HomePage> {
     }
     if (pool.length < 2) return;
     pool.shuffle(Random());
+    _setSlides(pool, immediate: true);
+  }
+
+  /// Cuts the pool down to [_slideCount], starts the rotation and shows its
+  /// first entry - unless a card is parked on the poster, in which case the
+  /// pool is swapped in silently and takes over once the pointer leaves.
+  void _setSlides(List<(Object, HeroInfo)> pool, {required bool immediate}) {
     _slides = pool.take(_slideCount).toList();
     _slideIndex = 0;
-    final (data, info) = _slides!.first;
-    _publishItem(data, info, immediate: true);
     _scheduleSlide();
+    if (_pinned) return;
+    final (data, info) = _slides!.first;
+    _publishItem(data, info, immediate: immediate);
+  }
+
+  /// Fills the carousel from a fresh random draw across the whole library.
+  ///
+  /// `Items/Latest` returns the same titles for months, so no amount of
+  /// shuffling makes the hero look new - the pool itself has to be random, and
+  /// only the server can do that (`SortBy=Random`, same call the taste rows
+  /// already use). Asking for twice [_slideCount] candidates is deliberate:
+  /// the poster is a 16:9 still, so titles without a backdrop get dropped.
+  Future<void> _loadCarousel(AppServices s) async {
+    final token = ++_carouselToken;
+    try {
+      final page = await s.catalog.query(
+        types: const ['Movie', 'Series'],
+        sortBy: 'Random',
+        limit: _slideCount * 2,
+      );
+      if (!mounted || token != _carouselToken) return;
+      final seen = <String>{};
+      final pool = <(Object, HeroInfo)>[];
+      for (final item in page.items) {
+        if (s.catalog.backdrop(item) == null) continue;
+        final info = _heroInfoOf(item);
+        if (info == null || !seen.add(info.key)) continue;
+        pool.add((item, info));
+      }
+      if (pool.length < 2) {
+        // One backdrop-less draw is still a working page: the row pool stays.
+        AppLog.write('[home] carousel: random draw left ${pool.length} with a backdrop');
+        return;
+      }
+      AppLog.write('[home] carousel: ${pool.length} random of ${page.total}, first ${page.items.first.name}');
+      _setSlides(pool, immediate: false);
+    } catch (e) {
+      debugPrint('[home] carousel random draw: $e');
+      AppLog.write('[home] carousel random draw failed: $e');
+    }
   }
 
   void _scheduleSlide() {
@@ -828,7 +894,17 @@ class _HomePageState extends State<HomePage> {
       return;
     }
     if (_pinned) return;
-    _slideIndex = (_slideIndex + 1) % slides.length;
+    if (_slideIndex + 1 >= slides.length) {
+      // End of the pool. Replaying the same eight posters is what made the
+      // carousel look like a static image after a minute, so draw a new batch
+      // instead. Scheduled first: if the draw comes back empty or fails, the
+      // old pool simply starts over.
+      _scheduleSlide();
+      final s = _services;
+      if (s != null) unawaited(_loadCarousel(s));
+      return;
+    }
+    _slideIndex++;
     final (data, info) = slides[_slideIndex];
     _publishItem(data, info);
     _scheduleSlide();
